@@ -207,6 +207,36 @@ func TestClientMissingBaseURLPaths(t *testing.T) {
 	if _, err := client.ListDatasources(context.Background()); !errors.Is(err, ErrMissingBaseURL) {
 		t.Fatalf("expected ErrMissingBaseURL for list datasources, got %v", err)
 	}
+	if _, err := client.GetDashboard(context.Background(), "x"); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for get dashboard, got %v", err)
+	}
+	if _, err := client.DeleteDashboard(context.Background(), "x"); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for delete dashboard, got %v", err)
+	}
+	if _, err := client.DashboardVersions(context.Background(), "x", 1); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for dashboard versions, got %v", err)
+	}
+	if _, err := client.RenderDashboard(context.Background(), DashboardRenderRequest{UID: "x"}); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for render dashboard, got %v", err)
+	}
+	if _, err := client.ListFolders(context.Background()); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for list folders, got %v", err)
+	}
+	if _, err := client.GetFolder(context.Background(), "x"); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for get folder, got %v", err)
+	}
+	if _, err := client.ListAnnotations(context.Background(), AnnotationListRequest{}); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for list annotations, got %v", err)
+	}
+	if _, err := client.AlertingRules(context.Background()); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for alerting rules, got %v", err)
+	}
+	if _, err := client.AlertingContactPoints(context.Background()); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for alerting contact points, got %v", err)
+	}
+	if _, err := client.AlertingPolicies(context.Background()); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for alerting policies, got %v", err)
+	}
 	if _, err := client.AssistantChat(context.Background(), "x", ""); !errors.Is(err, ErrMissingBaseURL) {
 		t.Fatalf("expected ErrMissingBaseURL for assistant chat, got %v", err)
 	}
@@ -248,6 +278,36 @@ func TestMethodInvalidURLBuildErrors(t *testing.T) {
 	}
 	if _, err := client.CreateDashboard(context.Background(), map[string]any{"title": "x"}, 1, true); err == nil {
 		t.Fatalf("expected create dashboard URL error")
+	}
+	if _, err := client.GetDashboard(context.Background(), "x"); err == nil {
+		t.Fatalf("expected get dashboard URL error")
+	}
+	if _, err := client.DeleteDashboard(context.Background(), "x"); err == nil {
+		t.Fatalf("expected delete dashboard URL error")
+	}
+	if _, err := client.DashboardVersions(context.Background(), "x", 1); err == nil {
+		t.Fatalf("expected dashboard versions URL error")
+	}
+	if _, err := client.RenderDashboard(context.Background(), DashboardRenderRequest{UID: "x"}); err == nil {
+		t.Fatalf("expected render dashboard URL error")
+	}
+	if _, err := client.ListFolders(context.Background()); err == nil {
+		t.Fatalf("expected folders URL error")
+	}
+	if _, err := client.GetFolder(context.Background(), "x"); err == nil {
+		t.Fatalf("expected folder URL error")
+	}
+	if _, err := client.ListAnnotations(context.Background(), AnnotationListRequest{}); err == nil {
+		t.Fatalf("expected annotations URL error")
+	}
+	if _, err := client.AlertingRules(context.Background()); err == nil {
+		t.Fatalf("expected alerting rules URL error")
+	}
+	if _, err := client.AlertingContactPoints(context.Background()); err == nil {
+		t.Fatalf("expected alerting contact points URL error")
+	}
+	if _, err := client.AlertingPolicies(context.Background()); err == nil {
+		t.Fatalf("expected alerting policies URL error")
 	}
 	if _, err := client.AssistantChat(context.Background(), "x", ""); err == nil {
 		t.Fatalf("expected assistant chat URL error")
@@ -359,10 +419,37 @@ func TestMethodQueryParamBranches(t *testing.T) {
 	if _, err := client.TracesSearch(context.Background(), "{}", "s", "e", 0); err != nil {
 		t.Fatalf("traces branch failed: %v", err)
 	}
+	if _, err := client.DashboardVersions(context.Background(), "ops", 0); err != nil {
+		t.Fatalf("dashboard versions branch failed: %v", err)
+	}
+	if _, err := client.ListAnnotations(context.Background(), AnnotationListRequest{
+		DashboardUID: "ops",
+		PanelID:      7,
+		Limit:        15,
+		From:         "s",
+		To:           "e",
+		Tags:         []string{"prod", "checkout"},
+		Type:         "annotation",
+	}); err != nil {
+		t.Fatalf("annotations branch failed: %v", err)
+	}
+	if _, err := client.RenderDashboard(context.Background(), DashboardRenderRequest{
+		UID:    "ops",
+		Width:  1200,
+		Height: 800,
+		Theme:  "light",
+		From:   "s",
+		To:     "e",
+		TZ:     "UTC",
+	}); err != nil {
+		t.Fatalf("render branch failed: %v", err)
+	}
 
 	foundMetricsParams := false
 	foundLogsNoLimit := false
 	foundTracesNoLimit := false
+	foundAnnotationsParams := false
+	foundRenderParams := false
 	for _, req := range requests {
 		switch req.URL.Host {
 		case "prom":
@@ -377,10 +464,97 @@ func TestMethodQueryParamBranches(t *testing.T) {
 			if req.URL.Query().Get("limit") == "" {
 				foundTracesNoLimit = true
 			}
+		case "base":
+			switch req.URL.Path {
+			case "/api/annotations":
+				if req.URL.Query().Get("dashboardUID") == "ops" && req.URL.Query().Get("panelId") == "7" && req.URL.Query().Get("type") == "annotation" {
+					foundAnnotationsParams = len(req.URL.Query()["tags"]) == 2
+				}
+			case "/render/d/ops/render":
+				if req.URL.Query().Get("width") == "1200" && req.URL.Query().Get("height") == "800" && req.URL.Query().Get("theme") == "light" && req.URL.Query().Get("from") == "s" && req.URL.Query().Get("to") == "e" && req.URL.Query().Get("tz") == "UTC" {
+					foundRenderParams = true
+				}
+			}
 		}
 	}
-	if !foundMetricsParams || !foundLogsNoLimit || !foundTracesNoLimit {
+	if !foundMetricsParams || !foundLogsNoLimit || !foundTracesNoLimit || !foundAnnotationsParams || !foundRenderParams {
 		t.Fatalf("expected query param branches to execute")
+	}
+}
+
+func TestClientDashboardFolderAnnotationAlertingMethods(t *testing.T) {
+	hits := make(map[string]int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits[r.Method+" "+r.URL.Path]++
+		if strings.HasPrefix(r.URL.Path, "/render/") {
+			if !strings.Contains(r.Header.Get("Accept"), "image/png") {
+				t.Fatalf("expected render accept header")
+			}
+			w.Header().Set("Content-Type", "image/png; charset=binary")
+			_, _ = w.Write([]byte("png"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(config.Config{
+		BaseURL: srv.URL,
+	}, srv.Client())
+
+	if _, err := client.GetDashboard(context.Background(), "ops"); err != nil {
+		t.Fatalf("get dashboard failed: %v", err)
+	}
+	if _, err := client.DeleteDashboard(context.Background(), "ops"); err != nil {
+		t.Fatalf("delete dashboard failed: %v", err)
+	}
+	if _, err := client.DashboardVersions(context.Background(), "ops", 5); err != nil {
+		t.Fatalf("dashboard versions failed: %v", err)
+	}
+	rendered, err := client.RenderDashboard(context.Background(), DashboardRenderRequest{UID: "ops", PanelID: 12})
+	if err != nil {
+		t.Fatalf("render dashboard failed: %v", err)
+	}
+	if rendered.ContentType != "image/png" || string(rendered.Data) != "png" {
+		t.Fatalf("unexpected render response: %+v", rendered)
+	}
+	if _, err := client.ListFolders(context.Background()); err != nil {
+		t.Fatalf("list folders failed: %v", err)
+	}
+	if _, err := client.GetFolder(context.Background(), "ops"); err != nil {
+		t.Fatalf("get folder failed: %v", err)
+	}
+	if _, err := client.ListAnnotations(context.Background(), AnnotationListRequest{DashboardUID: "ops"}); err != nil {
+		t.Fatalf("list annotations failed: %v", err)
+	}
+	if _, err := client.AlertingRules(context.Background()); err != nil {
+		t.Fatalf("alerting rules failed: %v", err)
+	}
+	if _, err := client.AlertingContactPoints(context.Background()); err != nil {
+		t.Fatalf("alerting contact points failed: %v", err)
+	}
+	if _, err := client.AlertingPolicies(context.Background()); err != nil {
+		t.Fatalf("alerting policies failed: %v", err)
+	}
+
+	if hits["GET /api/dashboards/uid/ops"] != 1 || hits["DELETE /api/dashboards/uid/ops"] != 1 {
+		t.Fatalf("unexpected dashboard hits: %+v", hits)
+	}
+	if hits["GET /api/dashboards/uid/ops/versions"] != 1 {
+		t.Fatalf("expected dashboard versions hit: %+v", hits)
+	}
+	if hits["GET /render/d-solo/ops/render"] != 1 {
+		t.Fatalf("expected render hit: %+v", hits)
+	}
+	if hits["GET /api/folders"] != 1 || hits["GET /api/folders/ops"] != 1 {
+		t.Fatalf("unexpected folder hits: %+v", hits)
+	}
+	if hits["GET /api/annotations"] != 1 {
+		t.Fatalf("expected annotations hit: %+v", hits)
+	}
+	if hits["GET /api/v1/provisioning/alert-rules"] != 1 || hits["GET /api/v1/provisioning/contact-points"] != 1 || hits["GET /api/v1/provisioning/policies"] != 1 {
+		t.Fatalf("unexpected alerting hits: %+v", hits)
 	}
 }
 
@@ -495,6 +669,62 @@ func TestRequestJSONErrorPaths(t *testing.T) {
 	}))
 	if _, err := client.requestJSON(context.Background(), http.MethodGet, "https://grafana.com", nil); err == nil {
 		t.Fatalf("expected read error")
+	}
+}
+
+func TestRequestBytesDefaultAcceptAndRenderSlugBranch(t *testing.T) {
+	requests := make([]*http.Request, 0)
+	client := NewClient(config.Config{BaseURL: "https://base"}, doerFunc(func(r *http.Request) (*http.Response, error) {
+		requests = append(requests, r)
+		if strings.Contains(r.URL.Path, "/render/") {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("png")),
+				Header:     http.Header{"Content-Type": []string{"image/png"}},
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			Header:     make(http.Header),
+		}, nil
+	}))
+
+	if _, _, err := client.requestBytes(context.Background(), http.MethodPost, "https://base/api/test", map[string]any{"ok": true}, ""); err != nil {
+		t.Fatalf("requestBytes should succeed: %v", err)
+	}
+	rendered, err := client.RenderDashboard(context.Background(), DashboardRenderRequest{UID: "ops", Slug: "overview"})
+	if err != nil {
+		t.Fatalf("render dashboard should succeed: %v", err)
+	}
+	if rendered.ContentType != "image/png" || rendered.Endpoint != "https://base/render/d/ops/overview" {
+		t.Fatalf("unexpected rendered dashboard: %+v", rendered)
+	}
+
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(requests))
+	}
+	if requests[0].Header.Get("Accept") != "*/*" {
+		t.Fatalf("expected default accept header, got %q", requests[0].Header.Get("Accept"))
+	}
+	if requests[0].Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("expected JSON content type for body request")
+	}
+	if requests[1].URL.Path != "/render/d/ops/overview" {
+		t.Fatalf("unexpected render path: %s", requests[1].URL.Path)
+	}
+}
+
+func TestRenderDashboardErrorBranch(t *testing.T) {
+	client := NewClient(config.Config{BaseURL: "https://base"}, doerFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       io.NopCloser(strings.NewReader("boom")),
+			Header:     make(http.Header),
+		}, nil
+	}))
+	if _, err := client.RenderDashboard(context.Background(), DashboardRenderRequest{UID: "ops"}); err == nil {
+		t.Fatalf("expected render dashboard error")
 	}
 }
 

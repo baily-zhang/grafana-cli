@@ -17,7 +17,7 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1
 	}
-	app := cli.NewApp(config.NewFileStore(path))
+	app := cli.NewApp(config.NewProfileStore(path))
 	return app.Run(context.Background(), args)
 }
 

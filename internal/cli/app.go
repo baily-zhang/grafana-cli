@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,10 +9,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
+	"github.com/itchyny/gojq"
 	"github.com/matiasvillaverde/grafana-cli/internal/agent"
 	"github.com/matiasvillaverde/grafana-cli/internal/config"
 	"github.com/matiasvillaverde/grafana-cli/internal/grafana"
@@ -22,8 +26,18 @@ type APIClient interface {
 	Raw(ctx context.Context, method, path string, body any) (any, error)
 	CloudStacks(ctx context.Context) (any, error)
 	SearchDashboards(ctx context.Context, query, tag string, limit int) (any, error)
+	GetDashboard(ctx context.Context, uid string) (any, error)
 	CreateDashboard(ctx context.Context, dashboard map[string]any, folderID int64, overwrite bool) (any, error)
+	DeleteDashboard(ctx context.Context, uid string) (any, error)
+	DashboardVersions(ctx context.Context, uid string, limit int) (any, error)
+	RenderDashboard(ctx context.Context, req grafana.DashboardRenderRequest) (grafana.RenderedDashboard, error)
 	ListDatasources(ctx context.Context) (any, error)
+	ListFolders(ctx context.Context) (any, error)
+	GetFolder(ctx context.Context, uid string) (any, error)
+	ListAnnotations(ctx context.Context, req grafana.AnnotationListRequest) (any, error)
+	AlertingRules(ctx context.Context) (any, error)
+	AlertingContactPoints(ctx context.Context) (any, error)
+	AlertingPolicies(ctx context.Context) (any, error)
 	AssistantChat(ctx context.Context, prompt, chatID string) (any, error)
 	AssistantChatStatus(ctx context.Context, chatID string) (any, error)
 	AssistantSkills(ctx context.Context) (any, error)
@@ -37,8 +51,10 @@ type APIClient interface {
 type ClientFactory func(config.Config) APIClient
 
 type globalOptions struct {
-	Output string
-	Fields []string
+	Output   string
+	Fields   []string
+	JQ       string
+	Template string
 }
 
 // App coordinates command parsing and execution.
@@ -46,12 +62,13 @@ type App struct {
 	Out       io.Writer
 	Err       io.Writer
 	Store     config.Store
+	Contexts  config.ContextStore
 	NewClient ClientFactory
 	Now       func() time.Time
 }
 
 func NewApp(store config.Store) *App {
-	return &App{
+	app := &App{
 		Out:   os.Stdout,
 		Err:   os.Stderr,
 		Store: store,
@@ -60,6 +77,10 @@ func NewApp(store config.Store) *App {
 		},
 		Now: time.Now,
 	}
+	if contexts, ok := store.(config.ContextStore); ok {
+		app.Contexts = contexts
+	}
+	return app
 }
 
 func (a *App) Run(ctx context.Context, args []string) int {
@@ -69,9 +90,9 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	if len(rest) == 0 || rest[0] == "help" || rest[0] == "--help" || rest[0] == "-h" {
+	if len(rest) == 0 || isHelpArg(rest[0]) {
 		_ = a.emit(opts, map[string]any{
-			"commands": []string{"auth", "api", "cloud", "dashboards", "datasources", "assistant", "runtime", "aggregate", "incident", "agent"},
+			"commands": []string{"auth", "context", "config", "api", "cloud", "dashboards", "datasources", "folders", "annotations", "alerting", "assistant", "runtime", "aggregate", "incident", "agent"},
 		})
 		return 0
 	}
@@ -80,6 +101,10 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	switch rest[0] {
 	case "auth":
 		runErr = a.runAuth(opts, rest[1:])
+	case "context":
+		runErr = a.runContext(opts, rest[1:])
+	case "config":
+		runErr = a.runConfig(opts, rest[1:])
 	case "api":
 		runErr = a.runAPI(ctx, opts, rest[1:])
 	case "cloud":
@@ -88,6 +113,12 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		runErr = a.runDashboards(ctx, opts, rest[1:])
 	case "datasources":
 		runErr = a.runDatasources(ctx, opts, rest[1:])
+	case "folders":
+		runErr = a.runFolders(ctx, opts, rest[1:])
+	case "annotations":
+		runErr = a.runAnnotations(ctx, opts, rest[1:])
+	case "alerting":
+		runErr = a.runAlerting(ctx, opts, rest[1:])
 	case "assistant":
 		runErr = a.runAssistant(ctx, opts, rest[1:])
 	case "runtime":
@@ -110,7 +141,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 }
 
 func (a *App) runAuth(opts globalOptions, args []string) error {
-	if len(args) == 0 {
+	if len(args) == 0 || isHelpArg(args[0]) {
 		return a.emit(opts, map[string]any{"commands": []string{"login", "status", "logout"}})
 	}
 
@@ -127,12 +158,14 @@ func (a *App) runAuth(opts globalOptions, args []string) error {
 			status = "authenticated"
 		}
 		return a.emit(opts, map[string]any{
+			"context":        selectedContextName(a.Contexts, ""),
 			"status":         status,
 			"base_url":       cfg.BaseURL,
 			"cloud_url":      cfg.CloudURL,
 			"prometheus_url": cfg.PrometheusURL,
 			"logs_url":       cfg.LogsURL,
 			"traces_url":     cfg.TracesURL,
+			"token_backend":  cfg.TokenBackend,
 			"org_id":         cfg.OrgID,
 		})
 	case "logout":
@@ -150,6 +183,7 @@ func (a *App) runAuthLogin(opts globalOptions, args []string) error {
 	fs.SetOutput(io.Discard)
 
 	token := fs.String("token", "", "Grafana token")
+	contextName := fs.String("context", "", "context name")
 	baseURL := fs.String("base-url", "", "Grafana base URL")
 	cloudURL := fs.String("cloud-url", "", "Grafana cloud API URL")
 	promURL := fs.String("prom-url", "", "Prometheus query URL")
@@ -189,11 +223,19 @@ func (a *App) runAuthLogin(opts globalOptions, args []string) error {
 		cfg.OrgID = *orgID
 	}
 
-	if err := a.Store.Save(cfg); err != nil {
+	if strings.TrimSpace(*contextName) != "" {
+		if a.Contexts == nil {
+			return errors.New("context support is unavailable")
+		}
+		if err := a.Contexts.SaveContext(*contextName, cfg); err != nil {
+			return err
+		}
+	} else if err := a.Store.Save(cfg); err != nil {
 		return err
 	}
 
 	return a.emit(opts, map[string]any{
+		"context":        selectedContextName(a.Contexts, *contextName),
 		"status":         "authenticated",
 		"base_url":       cfg.BaseURL,
 		"cloud_url":      cfg.CloudURL,
@@ -202,6 +244,128 @@ func (a *App) runAuthLogin(opts globalOptions, args []string) error {
 		"traces_url":     cfg.TracesURL,
 		"org_id":         cfg.OrgID,
 	})
+}
+
+func (a *App) runContext(opts globalOptions, args []string) error {
+	if a.Contexts == nil {
+		return errors.New("context support is unavailable")
+	}
+	if len(args) == 0 || isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"list", "use", "view"}})
+	}
+
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return errors.New("usage: context list")
+		}
+		contexts, err := a.Contexts.ListContexts()
+		if err != nil {
+			return err
+		}
+		items := make([]any, 0, len(contexts))
+		for _, item := range contexts {
+			items = append(items, map[string]any{
+				"name":          item.Name,
+				"current":       item.Current,
+				"authenticated": item.Authenticated,
+				"base_url":      item.BaseURL,
+				"cloud_url":     item.CloudURL,
+			})
+		}
+		return a.emit(opts, items)
+	case "use":
+		if len(args) != 2 {
+			return errors.New("usage: context use <NAME>")
+		}
+		if err := a.Contexts.UseContext(args[1]); err != nil {
+			return err
+		}
+		cfg, err := a.Store.Load()
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, configPayload(selectedContextName(a.Contexts, args[1]), cfg))
+	case "view":
+		if len(args) != 1 {
+			return errors.New("usage: context view")
+		}
+		cfg, err := a.Store.Load()
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, configPayload(selectedContextName(a.Contexts, ""), cfg))
+	default:
+		return fmt.Errorf("unknown context command: %s", args[0])
+	}
+}
+
+func (a *App) runConfig(opts globalOptions, args []string) error {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"list", "get", "set"}})
+	}
+
+	switch args[0] {
+	case "list":
+		contextName, rest, err := extractContextArg(args[1:])
+		if err != nil {
+			return err
+		}
+		if len(rest) != 0 {
+			return errors.New("usage: config list [--context NAME]")
+		}
+		cfg, name, err := a.loadConfigForContext(contextName)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, configPayload(name, cfg))
+	case "get":
+		contextName, rest, err := extractContextArg(args[1:])
+		if err != nil {
+			return err
+		}
+		if len(rest) != 1 {
+			return errors.New("usage: config get <KEY> [--context NAME]")
+		}
+		cfg, name, err := a.loadConfigForContext(contextName)
+		if err != nil {
+			return err
+		}
+		value, err := configValueForKey(cfg, rest[0])
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, map[string]any{
+			"context": name,
+			"key":     normalizeConfigKey(rest[0]),
+			"value":   value,
+		})
+	case "set":
+		contextName, rest, err := extractContextArg(args[1:])
+		if err != nil {
+			return err
+		}
+		if len(rest) != 2 {
+			return errors.New("usage: config set <KEY> <VALUE> [--context NAME]")
+		}
+		cfg, name, err := a.loadConfigForContext(contextName)
+		if err != nil {
+			return err
+		}
+		if err := setConfigValue(&cfg, rest[0], rest[1]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(contextName) != "" {
+			if err := a.Contexts.SaveContext(contextName, cfg); err != nil {
+				return err
+			}
+		} else if err := a.Store.Save(cfg); err != nil {
+			return err
+		}
+		return a.emit(opts, configPayload(name, cfg))
+	default:
+		return fmt.Errorf("unknown config command: %s", args[0])
+	}
 }
 
 func (a *App) runAPI(ctx context.Context, opts globalOptions, args []string) error {
@@ -244,6 +408,9 @@ func (a *App) runCloud(ctx context.Context, opts globalOptions, args []string) e
 	if len(args) == 0 {
 		return errors.New("usage: cloud stacks list")
 	}
+	if isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"stacks list"}})
+	}
 	if args[0] != "stacks" {
 		return fmt.Errorf("unknown cloud command: %s", args[0])
 	}
@@ -263,7 +430,10 @@ func (a *App) runCloud(ctx context.Context, opts globalOptions, args []string) e
 
 func (a *App) runDashboards(ctx context.Context, opts globalOptions, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: dashboards <list|create>")
+		return errors.New("usage: dashboards <list|get|create|delete|versions|render>")
+	}
+	if isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"list", "get", "create", "delete", "versions", "render"}})
 	}
 
 	cfg, err := a.requireAuthConfig()
@@ -283,6 +453,21 @@ func (a *App) runDashboards(ctx context.Context, opts globalOptions, args []stri
 			return err
 		}
 		result, err := client.SearchDashboards(ctx, *query, *tag, *limit)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "get":
+		fs := flag.NewFlagSet("dashboards get", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		uid := fs.String("uid", "", "dashboard UID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*uid) == "" {
+			return errors.New("--uid is required")
+		}
+		result, err := client.GetDashboard(ctx, *uid)
 		if err != nil {
 			return err
 		}
@@ -327,12 +512,96 @@ func (a *App) runDashboards(ctx context.Context, opts globalOptions, args []stri
 			return err
 		}
 		return a.emit(opts, result)
+	case "delete":
+		fs := flag.NewFlagSet("dashboards delete", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		uid := fs.String("uid", "", "dashboard UID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*uid) == "" {
+			return errors.New("--uid is required")
+		}
+		result, err := client.DeleteDashboard(ctx, *uid)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "versions":
+		fs := flag.NewFlagSet("dashboards versions", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		uid := fs.String("uid", "", "dashboard UID")
+		limit := fs.Int("limit", 20, "limit")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*uid) == "" {
+			return errors.New("--uid is required")
+		}
+		result, err := client.DashboardVersions(ctx, *uid, *limit)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "render":
+		fs := flag.NewFlagSet("dashboards render", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		uid := fs.String("uid", "", "dashboard UID")
+		slug := fs.String("slug", "", "dashboard slug")
+		panelID := fs.Int64("panel-id", 0, "panel ID for panel render")
+		width := fs.Int("width", 1600, "render width")
+		height := fs.Int("height", 900, "render height")
+		theme := fs.String("theme", "light", "render theme")
+		from := fs.String("from", "now-6h", "time range start")
+		to := fs.String("to", "now", "time range end")
+		tz := fs.String("tz", "UTC", "timezone")
+		out := fs.String("out", "", "output PNG path")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*uid) == "" {
+			return errors.New("--uid is required")
+		}
+		if strings.TrimSpace(*out) == "" {
+			return errors.New("--out is required")
+		}
+		rendered, err := client.RenderDashboard(ctx, grafana.DashboardRenderRequest{
+			UID:     *uid,
+			Slug:    *slug,
+			PanelID: *panelID,
+			Width:   *width,
+			Height:  *height,
+			Theme:   *theme,
+			From:    *from,
+			To:      *to,
+			TZ:      *tz,
+		})
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(*out, rendered.Data, 0o644); err != nil {
+			return err
+		}
+		return a.emit(opts, map[string]any{
+			"uid":          *uid,
+			"panel_id":     *panelID,
+			"path":         *out,
+			"content_type": rendered.ContentType,
+			"bytes":        rendered.Bytes,
+			"endpoint":     rendered.Endpoint,
+		})
 	default:
 		return fmt.Errorf("unknown dashboards command: %s", args[0])
 	}
 }
 
 func (a *App) runDatasources(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"list"}})
+	}
 	if len(args) == 0 || args[0] != "list" {
 		return errors.New("usage: datasources list [--type TYPE] [--name NAME]")
 	}
@@ -357,9 +626,143 @@ func (a *App) runDatasources(ctx context.Context, opts globalOptions, args []str
 	return a.emit(opts, result)
 }
 
+func (a *App) runFolders(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: folders <list|get>")
+	}
+	if isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"list", "get"}})
+	}
+
+	cfg, err := a.requireAuthConfig()
+	if err != nil {
+		return err
+	}
+	client := a.NewClient(cfg)
+
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return errors.New("usage: folders list")
+		}
+		result, err := client.ListFolders(ctx)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "get":
+		fs := flag.NewFlagSet("folders get", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		uid := fs.String("uid", "", "folder UID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*uid) == "" {
+			return errors.New("--uid is required")
+		}
+		result, err := client.GetFolder(ctx, *uid)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	default:
+		return fmt.Errorf("unknown folders command: %s", args[0])
+	}
+}
+
+func (a *App) runAnnotations(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"list"}})
+	}
+	if len(args) == 0 || args[0] != "list" {
+		return errors.New("usage: annotations list [--dashboard-uid UID] [--panel-id ID] [--limit 100] [--from VALUE] [--to VALUE] [--tags a,b] [--type annotation]")
+	}
+
+	fs := flag.NewFlagSet("annotations list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dashboardUID := fs.String("dashboard-uid", "", "dashboard UID")
+	panelID := fs.Int64("panel-id", 0, "panel ID")
+	limit := fs.Int("limit", 100, "result limit")
+	from := fs.String("from", "", "from time")
+	to := fs.String("to", "", "to time")
+	tags := fs.String("tags", "", "comma separated tags")
+	annotationType := fs.String("type", "", "annotation type")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	cfg, err := a.requireAuthConfig()
+	if err != nil {
+		return err
+	}
+	result, err := a.NewClient(cfg).ListAnnotations(ctx, grafana.AnnotationListRequest{
+		DashboardUID: *dashboardUID,
+		PanelID:      *panelID,
+		Limit:        *limit,
+		From:         *from,
+		To:           *to,
+		Tags:         splitCSV(*tags),
+		Type:         *annotationType,
+	})
+	if err != nil {
+		return err
+	}
+	return a.emit(opts, result)
+}
+
+func (a *App) runAlerting(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"rules list", "contact-points list", "policies get"}})
+	}
+	if len(args) < 2 {
+		return errors.New("usage: alerting <rules|contact-points|policies> <list|get>")
+	}
+
+	cfg, err := a.requireAuthConfig()
+	if err != nil {
+		return err
+	}
+	client := a.NewClient(cfg)
+
+	switch args[0] {
+	case "rules":
+		if args[1] != "list" || len(args) != 2 {
+			return errors.New("usage: alerting rules list")
+		}
+		result, err := client.AlertingRules(ctx)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "contact-points":
+		if args[1] != "list" || len(args) != 2 {
+			return errors.New("usage: alerting contact-points list")
+		}
+		result, err := client.AlertingContactPoints(ctx)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "policies":
+		if args[1] != "get" || len(args) != 2 {
+			return errors.New("usage: alerting policies get")
+		}
+		result, err := client.AlertingPolicies(ctx)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	default:
+		return fmt.Errorf("unknown alerting command: %s", args[0])
+	}
+}
+
 func (a *App) runAssistant(ctx context.Context, opts globalOptions, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: assistant <chat|status|skills>")
+	}
+	if isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"chat", "status", "skills"}})
 	}
 
 	cfg, err := a.requireAuthConfig()
@@ -415,6 +818,9 @@ func (a *App) runAssistant(ctx context.Context, opts globalOptions, args []strin
 }
 
 func (a *App) runRuntime(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"metrics query", "logs query", "traces search"}})
+	}
 	if len(args) < 2 {
 		return errors.New("usage: runtime <metrics|logs|traces> <query|search> [flags]")
 	}
@@ -495,6 +901,9 @@ func (a *App) runRuntime(ctx context.Context, opts globalOptions, args []string)
 }
 
 func (a *App) runAggregate(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"snapshot"}})
+	}
 	if len(args) == 0 || args[0] != "snapshot" {
 		return errors.New("usage: aggregate snapshot --metric-expr EXPR --log-query QUERY --trace-query QUERY [--start RFC3339] [--end RFC3339] [--step 30s] [--limit 200]")
 	}
@@ -536,6 +945,9 @@ func (a *App) runAggregate(ctx context.Context, opts globalOptions, args []strin
 }
 
 func (a *App) runIncident(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"analyze"}})
+	}
 	if len(args) == 0 || args[0] != "analyze" {
 		return errors.New("usage: incident analyze --goal GOAL [--start RFC3339] [--end RFC3339] [--step 30s] [--limit 200] [--include-raw]")
 	}
@@ -610,6 +1022,9 @@ func (a *App) runIncident(ctx context.Context, opts globalOptions, args []string
 func (a *App) runAgent(ctx context.Context, opts globalOptions, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: agent <plan|run> --goal GOAL")
+	}
+	if isHelpArg(args[0]) {
+		return a.emit(opts, map[string]any{"commands": []string{"plan", "run"}})
 	}
 
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
@@ -694,6 +1109,32 @@ func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 			i++
 		case strings.HasPrefix(arg, "--fields="):
 			opts.Fields = splitCSV(strings.TrimPrefix(arg, "--fields="))
+		case arg == "--json":
+			if i+1 >= len(args) {
+				return globalOptions{}, nil, errors.New("--json requires a value")
+			}
+			opts.Fields = splitCSV(args[i+1])
+			opts.Output = "json"
+			i++
+		case strings.HasPrefix(arg, "--json="):
+			opts.Fields = splitCSV(strings.TrimPrefix(arg, "--json="))
+			opts.Output = "json"
+		case arg == "--jq":
+			if i+1 >= len(args) {
+				return globalOptions{}, nil, errors.New("--jq requires a value")
+			}
+			opts.JQ = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--jq="):
+			opts.JQ = strings.TrimPrefix(arg, "--jq=")
+		case arg == "--template":
+			if i+1 >= len(args) {
+				return globalOptions{}, nil, errors.New("--template requires a value")
+			}
+			opts.Template = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--template="):
+			opts.Template = strings.TrimPrefix(arg, "--template=")
 		default:
 			rest = append(rest, arg)
 		}
@@ -702,11 +1143,28 @@ func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 	if opts.Output != "json" && opts.Output != "pretty" {
 		return globalOptions{}, nil, fmt.Errorf("invalid --output value: %s", opts.Output)
 	}
+	if opts.JQ != "" && opts.Template != "" {
+		return globalOptions{}, nil, errors.New("--jq and --template cannot be used together")
+	}
 	return opts, rest, nil
 }
 
 func (a *App) emit(opts globalOptions, payload any) error {
 	payload = projectFields(payload, opts.Fields)
+	if opts.JQ != "" {
+		value, err := applyJQ(payload, opts.JQ)
+		if err != nil {
+			return err
+		}
+		payload = value
+	}
+	if opts.Template != "" {
+		return renderTemplate(a.Out, payload, opts.Template)
+	}
+	if isScalar(payload) {
+		_, err := fmt.Fprintln(a.Out, scalarString(payload))
+		return err
+	}
 	enc := json.NewEncoder(a.Out)
 	if opts.Output == "pretty" {
 		enc.SetIndent("", "  ")
@@ -850,6 +1308,203 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func isHelpArg(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "help", "--help", "-h", "-help":
+		return true
+	default:
+		return false
+	}
+}
+
+func selectedContextName(contexts config.ContextStore, requested string) string {
+	requested = strings.TrimSpace(requested)
+	if requested != "" {
+		return requested
+	}
+	if contexts == nil {
+		return defaultContextNameForCLI()
+	}
+	name, err := contexts.CurrentContext()
+	if err != nil || strings.TrimSpace(name) == "" {
+		return defaultContextNameForCLI()
+	}
+	return name
+}
+
+func defaultContextNameForCLI() string {
+	return "default"
+}
+
+func (a *App) loadConfigForContext(name string) (config.Config, string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		cfg, err := a.Store.Load()
+		if err != nil {
+			return config.Config{}, "", err
+		}
+		return cfg, selectedContextName(a.Contexts, ""), nil
+	}
+	if a.Contexts == nil {
+		return config.Config{}, "", errors.New("context support is unavailable")
+	}
+	cfg, err := a.Contexts.LoadContext(name)
+	if err != nil {
+		return config.Config{}, "", err
+	}
+	return cfg, name, nil
+}
+
+func configPayload(contextName string, cfg config.Config) map[string]any {
+	return map[string]any{
+		"context":        contextName,
+		"base_url":       cfg.BaseURL,
+		"cloud_url":      cfg.CloudURL,
+		"prometheus_url": cfg.PrometheusURL,
+		"logs_url":       cfg.LogsURL,
+		"traces_url":     cfg.TracesURL,
+		"org_id":         cfg.OrgID,
+		"token_backend":  cfg.TokenBackend,
+	}
+}
+
+func extractContextArg(args []string) (string, []string, error) {
+	contextName := ""
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		switch {
+		case arg == "--context":
+			if i+1 >= len(args) {
+				return "", nil, errors.New("--context requires a value")
+			}
+			contextName = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--context="):
+			contextName = strings.TrimPrefix(arg, "--context=")
+		default:
+			rest = append(rest, args[i])
+		}
+	}
+	return contextName, rest, nil
+}
+
+func normalizeConfigKey(key string) string {
+	return strings.ToLower(strings.TrimSpace(key))
+}
+
+func configValueForKey(cfg config.Config, key string) (any, error) {
+	switch normalizeConfigKey(key) {
+	case "base-url", "base_url":
+		return cfg.BaseURL, nil
+	case "cloud-url", "cloud_url":
+		return cfg.CloudURL, nil
+	case "prom-url", "prom_url", "prometheus-url", "prometheus_url":
+		return cfg.PrometheusURL, nil
+	case "logs-url", "logs_url":
+		return cfg.LogsURL, nil
+	case "traces-url", "traces_url":
+		return cfg.TracesURL, nil
+	case "org-id", "org_id":
+		return cfg.OrgID, nil
+	case "token-backend", "token_backend":
+		return cfg.TokenBackend, nil
+	default:
+		return nil, errors.New("unknown config key")
+	}
+}
+
+func setConfigValue(cfg *config.Config, key, value string) error {
+	switch normalizeConfigKey(key) {
+	case "base-url", "base_url":
+		cfg.BaseURL = strings.TrimSpace(value)
+	case "cloud-url", "cloud_url":
+		cfg.CloudURL = strings.TrimSpace(value)
+	case "prom-url", "prom_url", "prometheus-url", "prometheus_url":
+		cfg.PrometheusURL = strings.TrimSpace(value)
+	case "logs-url", "logs_url":
+		cfg.LogsURL = strings.TrimSpace(value)
+	case "traces-url", "traces_url":
+		cfg.TracesURL = strings.TrimSpace(value)
+	case "org-id", "org_id":
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || parsed < 0 {
+			return errors.New("invalid org-id")
+		}
+		cfg.OrgID = parsed
+	default:
+		return errors.New("unknown config key")
+	}
+	return nil
+}
+
+func applyJQ(payload any, expr string) (any, error) {
+	query, err := gojq.Parse(expr)
+	if err != nil {
+		return nil, err
+	}
+	iter := query.Run(payload)
+	results := make([]any, 0, 1)
+	for {
+		value, ok := iter.Next()
+		if !ok {
+			break
+		}
+		if err, ok := value.(error); ok {
+			return nil, err
+		}
+		results = append(results, value)
+	}
+	switch len(results) {
+	case 0:
+		return nil, nil
+	case 1:
+		return results[0], nil
+	default:
+		return results, nil
+	}
+}
+
+func renderTemplate(out io.Writer, payload any, text string) error {
+	tmpl, err := template.New("output").Funcs(template.FuncMap{
+		"json": func(v any) (string, error) {
+			data, err := json.Marshal(v)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		},
+	}).Parse(text)
+	if err != nil {
+		return err
+	}
+	buf := &bytes.Buffer{}
+	if err := tmpl.Execute(buf, payload); err != nil {
+		return err
+	}
+	if !bytes.HasSuffix(buf.Bytes(), []byte("\n")) {
+		buf.WriteByte('\n')
+	}
+	_, err = out.Write(buf.Bytes())
+	return err
+}
+
+func isScalar(value any) bool {
+	switch value.(type) {
+	case nil, string, bool, int, int64, float64, float32, json.Number:
+		return true
+	default:
+		return false
+	}
+}
+
+func scalarString(value any) string {
+	if value == nil {
+		return "null"
+	}
+	return fmt.Sprint(value)
 }
 
 func parseInt(value string, fallback int) int {

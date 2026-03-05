@@ -50,7 +50,8 @@ Use grafana-cli to investigate a latency spike in checkout, summarize only key m
 
 - **Compact JSON by default** (`--output json` implied)
 - **Optional readable output**: `--output pretty`
-- **Token minimization**: `--fields` projection to return only required keys
+- **Structured selection**: `--json`, `--jq`, and `--template` for agent-safe output shaping
+- **Token minimization**: `--fields` remains available as a compatibility alias for `--json`
 - **Deterministic command behavior**: stable flags, stable output shapes
 - **Composability**: each command is script/agent safe
 
@@ -80,6 +81,10 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 - Auth/session
   - `auth login|status|logout`
+  - platform-aware token storage: native keyring first, local token file fallback
+- Context and config management
+  - `context list|use|view`
+  - `config list|get|set`
 - Raw API access
   - `api <METHOD> <PATH> [--body JSON]`
 - Cloud inventory
@@ -92,8 +97,19 @@ export PATH="$PATH:$(go env GOPATH)/bin"
   - `aggregate snapshot --metric-expr ... --log-query ... --trace-query ...`
 - Dashboard and datasource operations
   - `dashboards list --query ... --tag ... --limit ...`
+  - `dashboards get --uid ...`
   - `dashboards create --title ...` or `--template-json ...`
+  - `dashboards delete --uid ...`
+  - `dashboards versions --uid ... [--limit ...]`
+  - `dashboards render --uid ... [--panel-id ...] --out ...`
   - `datasources list --type ... --name ...`
+- Folder, annotation, and alerting reads
+  - `folders list`
+  - `folders get --uid ...`
+  - `annotations list [--dashboard-uid ... --panel-id ... --tags ...]`
+  - `alerting rules list`
+  - `alerting contact-points list`
+  - `alerting policies get`
 - Grafana Assistant operations
   - `assistant chat --prompt ... [--chat-id ...]`
   - `assistant status --chat-id ...`
@@ -105,6 +121,9 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 ## Quick Start
 
 ```bash
+grafana -help
+grafana dashboards -help
+
 grafana auth login \
   --token "$GRAFANA_TOKEN" \
   --base-url "https://your-stack.grafana.net" \
@@ -113,11 +132,22 @@ grafana auth login \
   --logs-url "https://logs-prod-01-eu-west-0.grafana.net" \
   --traces-url "https://tempo-prod-01-eu-west-0.grafana.net"
 
+# The token is stored outside config.json using the OS keyring when available.
+
+# Create and switch named contexts, like separate stacks or environments.
+grafana auth login --context prod --token "$GRAFANA_TOKEN" --base-url "https://prod.grafana.net"
+grafana context list
+grafana context use prod
+grafana config get base-url
+grafana config set org-id 12
+
 # Incident analysis (compact JSON)
 grafana incident analyze --goal "Investigate elevated error rate"
 
 # Return only what the agent needs
-grafana --fields summary.metrics_series,summary.log_streams incident analyze --goal "Latency spike"
+grafana --json summary.metrics_series,summary.log_streams incident analyze --goal "Latency spike"
+grafana --jq '.summary' incident analyze --goal "Latency spike"
+grafana --template '{{.context}} {{.base_url}}' context view
 
 # Talk with Grafana Assistant
 grafana assistant chat --prompt "Investigate elevated error rate in checkout service"
@@ -130,6 +160,12 @@ grafana assistant status --chat-id "chat_123"
 
 # Create a dashboard from JSON template
 grafana dashboards create --template-json '{"title":"Incident Overview","schemaVersion":39,"version":0,"panels":[]}'
+
+# Fetch dashboard metadata
+grafana dashboards get --uid "incident-overview"
+
+# Render a panel screenshot for agent inspection
+grafana dashboards render --uid "incident-overview" --panel-id 4 --out /tmp/incident-overview-panel.png
 ```
 
 ## Product Coverage Plan (WIP)

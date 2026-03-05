@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -20,7 +21,8 @@ type Config struct {
 	PrometheusURL string `json:"prometheus_url"`
 	LogsURL       string `json:"logs_url"`
 	TracesURL     string `json:"traces_url"`
-	Token         string `json:"token"`
+	Token         string `json:"token,omitempty"`
+	TokenBackend  string `json:"-"`
 	OrgID         int64  `json:"org_id"`
 }
 
@@ -47,22 +49,24 @@ type Store interface {
 
 // FileStore persists config as JSON on disk.
 type FileStore struct {
-	path string
+	path   string
+	secret SecretStore
 }
 
 func NewFileStore(path string) *FileStore {
-	return &FileStore{path: path}
+	return NewFileStoreWithSecretStore(path, newDefaultSecretStore(path))
+}
+
+func NewFileStoreWithSecretStore(path string, secret SecretStore) *FileStore {
+	return &FileStore{path: path, secret: secret}
 }
 
 func DefaultPath() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); dir != "" {
-		return filepath.Join(dir, "grafana-cli", "config.json"), nil
+	dir, err := defaultConfigDir(runtime.GOOS, os.Getenv)
+	if err != nil {
+		return "", err
 	}
-	home := strings.TrimSpace(os.Getenv("HOME"))
-	if home == "" {
-		return "", errors.New("HOME is not set")
-	}
-	return filepath.Join(home, ".config", "grafana-cli", "config.json"), nil
+	return filepath.Join(dir, "grafana-cli", "config.json"), nil
 }
 
 func (s *FileStore) Path() string {
@@ -86,17 +90,47 @@ func (s *FileStore) Load() (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
 	}
+	legacyToken := strings.TrimSpace(cfg.Token)
 	cfg.ApplyDefaults()
+	if s.secret == nil {
+		return cfg, nil
+	}
+	token, backend, err := s.secret.Load()
+	if err != nil {
+		if legacyToken == "" {
+			return Config{}, err
+		}
+		cfg.Token = legacyToken
+		return cfg, nil
+	}
+	if token != "" {
+		cfg.Token = token
+		cfg.TokenBackend = backend
+		return cfg, nil
+	}
+	if legacyToken == "" {
+		return cfg, nil
+	}
+	cfg.Token = legacyToken
+	backend, err = s.secret.Save(legacyToken)
+	if err != nil {
+		return cfg, nil
+	}
+	cfg.TokenBackend = backend
+	if err := s.writeConfig(cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
 func (s *FileStore) Save(cfg Config) error {
 	cfg.ApplyDefaults()
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
+	if s.secret != nil {
+		if _, err := s.secret.Save(cfg.Token); err != nil {
+			return err
+		}
 	}
-	data, _ := json.MarshalIndent(cfg, "", "  ")
-	return os.WriteFile(s.path, data, 0o600)
+	return s.writeConfig(cfg)
 }
 
 func (s *FileStore) Clear() error {
@@ -104,5 +138,51 @@ func (s *FileStore) Clear() error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if s.secret != nil {
+		return s.secret.Clear()
+	}
 	return nil
+}
+
+func (s *FileStore) writeConfig(cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return err
+	}
+	stored := cfg
+	stored.Token = ""
+	stored.TokenBackend = ""
+	data, _ := json.MarshalIndent(stored, "", "  ")
+	return os.WriteFile(s.path, data, 0o600)
+}
+
+func defaultConfigDir(goos string, getenv func(string) string) (string, error) {
+	switch goos {
+	case "windows":
+		if dir := strings.TrimSpace(getenv("APPDATA")); dir != "" {
+			return dir, nil
+		}
+		home := strings.TrimSpace(getenv("USERPROFILE"))
+		if home == "" {
+			home = strings.TrimSpace(getenv("HOME"))
+		}
+		if home == "" {
+			return "", errors.New("HOME is not set")
+		}
+		return filepath.Join(home, "AppData", "Roaming"), nil
+	case "darwin":
+		home := strings.TrimSpace(getenv("HOME"))
+		if home == "" {
+			return "", errors.New("HOME is not set")
+		}
+		return filepath.Join(home, "Library", "Application Support"), nil
+	default:
+		if dir := strings.TrimSpace(getenv("XDG_CONFIG_HOME")); dir != "" {
+			return dir, nil
+		}
+		home := strings.TrimSpace(getenv("HOME"))
+		if home == "" {
+			return "", errors.New("HOME is not set")
+		}
+		return filepath.Join(home, ".config"), nil
+	}
 }

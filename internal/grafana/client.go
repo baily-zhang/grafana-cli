@@ -56,6 +56,38 @@ type AggregateSnapshot struct {
 	Traces  any `json:"traces"`
 }
 
+// DashboardRenderRequest defines server-side dashboard rendering options.
+type DashboardRenderRequest struct {
+	UID     string `json:"uid"`
+	Slug    string `json:"slug"`
+	PanelID int64  `json:"panel_id"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Theme   string `json:"theme"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	TZ      string `json:"tz"`
+}
+
+// RenderedDashboard contains the rendered artifact and response metadata.
+type RenderedDashboard struct {
+	Data        []byte `json:"-"`
+	ContentType string `json:"content_type"`
+	Endpoint    string `json:"endpoint"`
+	Bytes       int    `json:"bytes"`
+}
+
+// AnnotationListRequest defines filters for annotation queries.
+type AnnotationListRequest struct {
+	DashboardUID string   `json:"dashboard_uid"`
+	PanelID      int64    `json:"panel_id"`
+	Limit        int      `json:"limit"`
+	From         string   `json:"from"`
+	To           string   `json:"to"`
+	Tags         []string `json:"tags"`
+	Type         string   `json:"type"`
+}
+
 // Client provides typed access to Grafana API domains.
 type Client struct {
 	cfg       config.Config
@@ -115,6 +147,17 @@ func (c *Client) SearchDashboards(ctx context.Context, query, tag string, limit 
 	return c.requestJSON(ctx, http.MethodGet, u, nil)
 }
 
+func (c *Client) GetDashboard(ctx context.Context, uid string) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/dashboards/uid/"+url.PathEscape(uid), nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
 func (c *Client) CreateDashboard(ctx context.Context, dashboard map[string]any, folderID int64, overwrite bool) (any, error) {
 	if strings.TrimSpace(c.cfg.BaseURL) == "" {
 		return nil, ErrMissingBaseURL
@@ -133,11 +176,111 @@ func (c *Client) CreateDashboard(ctx context.Context, dashboard map[string]any, 
 	return c.requestJSON(ctx, http.MethodPost, u, payload)
 }
 
+func (c *Client) DeleteDashboard(ctx context.Context, uid string) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/dashboards/uid/"+url.PathEscape(uid), nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodDelete, u, nil)
+}
+
+func (c *Client) DashboardVersions(ctx context.Context, uid string, limit int) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/dashboards/uid/"+url.PathEscape(uid)+"/versions", q)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
+func (c *Client) RenderDashboard(ctx context.Context, req DashboardRenderRequest) (RenderedDashboard, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return RenderedDashboard{}, ErrMissingBaseURL
+	}
+	slug := strings.TrimSpace(req.Slug)
+	if slug == "" {
+		slug = "render"
+	}
+	path := "/render/d/" + url.PathEscape(req.UID) + "/" + url.PathEscape(slug)
+	q := url.Values{}
+	if req.PanelID > 0 {
+		path = "/render/d-solo/" + url.PathEscape(req.UID) + "/" + url.PathEscape(slug)
+		q.Set("panelId", strconv.FormatInt(req.PanelID, 10))
+	}
+	if req.Width > 0 {
+		q.Set("width", strconv.Itoa(req.Width))
+	}
+	if req.Height > 0 {
+		q.Set("height", strconv.Itoa(req.Height))
+	}
+	if strings.TrimSpace(req.Theme) != "" {
+		q.Set("theme", req.Theme)
+	}
+	if strings.TrimSpace(req.From) != "" {
+		q.Set("from", req.From)
+	}
+	if strings.TrimSpace(req.To) != "" {
+		q.Set("to", req.To)
+	}
+	if strings.TrimSpace(req.TZ) != "" {
+		q.Set("tz", req.TZ)
+	}
+	u, err := joinURL(c.cfg.BaseURL, path, q)
+	if err != nil {
+		return RenderedDashboard{}, err
+	}
+	data, headers, err := c.requestBytes(ctx, http.MethodGet, u, nil, "image/png,application/json")
+	if err != nil {
+		return RenderedDashboard{}, err
+	}
+	contentType := headers.Get("Content-Type")
+	if index := strings.Index(contentType, ";"); index >= 0 {
+		contentType = strings.TrimSpace(contentType[:index])
+	}
+	return RenderedDashboard{
+		Data:        data,
+		ContentType: contentType,
+		Endpoint:    u,
+		Bytes:       len(data),
+	}, nil
+}
+
 func (c *Client) ListDatasources(ctx context.Context) (any, error) {
 	if strings.TrimSpace(c.cfg.BaseURL) == "" {
 		return nil, ErrMissingBaseURL
 	}
 	u, err := joinURL(c.cfg.BaseURL, "/api/datasources", nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
+func (c *Client) ListFolders(ctx context.Context) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/folders", nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
+func (c *Client) GetFolder(ctx context.Context, uid string) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/folders/"+url.PathEscape(uid), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +309,41 @@ func (c *Client) AssistantChatStatus(ctx context.Context, chatID string) (any, e
 		return nil, ErrMissingBaseURL
 	}
 	u, err := joinURL(c.cfg.BaseURL, "/api/plugins/grafana-assistant-app/resources/api/v1/chats/"+url.PathEscape(chatID), nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
+func (c *Client) ListAnnotations(ctx context.Context, req AnnotationListRequest) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	q := url.Values{}
+	if strings.TrimSpace(req.DashboardUID) != "" {
+		q.Set("dashboardUID", req.DashboardUID)
+	}
+	if req.PanelID > 0 {
+		q.Set("panelId", strconv.FormatInt(req.PanelID, 10))
+	}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if strings.TrimSpace(req.From) != "" {
+		q.Set("from", req.From)
+	}
+	if strings.TrimSpace(req.To) != "" {
+		q.Set("to", req.To)
+	}
+	if strings.TrimSpace(req.Type) != "" {
+		q.Set("type", req.Type)
+	}
+	for _, tag := range req.Tags {
+		if strings.TrimSpace(tag) != "" {
+			q.Add("tags", tag)
+		}
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/annotations", q)
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +427,39 @@ func (c *Client) TracesSearch(ctx context.Context, query, start, end string, lim
 	return c.requestJSON(ctx, http.MethodGet, u, nil)
 }
 
+func (c *Client) AlertingRules(ctx context.Context) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/v1/provisioning/alert-rules", nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
+func (c *Client) AlertingContactPoints(ctx context.Context) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/v1/provisioning/contact-points", nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
+func (c *Client) AlertingPolicies(ctx context.Context) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/v1/provisioning/policies", nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
 func (c *Client) AggregateSnapshot(ctx context.Context, req AggregateRequest) (AggregateSnapshot, error) {
 	metrics, err := c.MetricsRange(ctx, req.MetricExpr, req.Start, req.End, req.Step)
 	if err != nil {
@@ -266,20 +477,39 @@ func (c *Client) AggregateSnapshot(ctx context.Context, req AggregateRequest) (A
 }
 
 func (c *Client) requestJSON(ctx context.Context, method, endpoint string, body any) (any, error) {
+	data, _, err := c.requestBytes(ctx, method, endpoint, body, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return map[string]any{}, nil
+	}
+
+	var out any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) requestBytes(ctx context.Context, method, endpoint string, body any, accept string) ([]byte, http.Header, error) {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reader = bytes.NewReader(data)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	req.Header.Set("Accept", "application/json")
+	if strings.TrimSpace(accept) == "" {
+		accept = "*/*"
+	}
+	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", c.userAgent)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -293,7 +523,7 @@ func (c *Client) requestJSON(ctx context.Context, method, endpoint string, body 
 
 	resp, err := c.doer.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -301,20 +531,12 @@ func (c *Client) requestJSON(ctx context.Context, method, endpoint string, body 
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+		return nil, nil, &HTTPError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return map[string]any{}, nil
-	}
-
-	var out any
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return data, resp.Header.Clone(), nil
 }
 
 func joinURL(base, path string, query url.Values) (string, error) {

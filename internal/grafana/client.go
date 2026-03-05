@@ -144,6 +144,45 @@ func (c *Client) ListDatasources(ctx context.Context) (any, error) {
 	return c.requestJSON(ctx, http.MethodGet, u, nil)
 }
 
+func (c *Client) AssistantChat(ctx context.Context, prompt, chatID string) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/plugins/grafana-assistant-app/resources/api/v1/assistant/chats", nil)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{
+		"prompt": prompt,
+	}
+	if strings.TrimSpace(chatID) != "" {
+		body["chatId"] = chatID
+	}
+	return c.requestJSON(ctx, http.MethodPost, u, body)
+}
+
+func (c *Client) AssistantChatStatus(ctx context.Context, chatID string) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/plugins/grafana-assistant-app/resources/api/v1/chats/"+url.PathEscape(chatID), nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
+func (c *Client) AssistantSkills(ctx context.Context) (any, error) {
+	if strings.TrimSpace(c.cfg.BaseURL) == "" {
+		return nil, ErrMissingBaseURL
+	}
+	u, err := joinURL(c.cfg.BaseURL, "/api/plugins/grafana-assistant-app/resources/api/v1/assistant/skills", nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestJSON(ctx, http.MethodGet, u, nil)
+}
+
 func (c *Client) MetricsRange(ctx context.Context, expr, start, end, step string) (any, error) {
 	if strings.TrimSpace(c.cfg.PrometheusURL) == "" {
 		return nil, ErrMissingPrometheusURL
@@ -256,7 +295,9 @@ func (c *Client) requestJSON(ctx context.Context, method, endpoint string, body 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

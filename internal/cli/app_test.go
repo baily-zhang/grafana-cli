@@ -47,28 +47,37 @@ func (f *fakeStore) Path() string {
 }
 
 type fakeClient struct {
-	rawResult          any
-	rawErr             error
-	cloudResult        any
-	cloudErr           error
-	searchDashResult   any
-	searchDashErr      error
-	createDashResult   any
-	createDashErr      error
-	listDSResult       any
-	listDSErr          error
-	metricsResult      any
-	metricsErr         error
-	logsResult         any
-	logsErr            error
-	tracesResult       any
-	tracesErr          error
-	aggregateResult    grafana.AggregateSnapshot
-	aggregateErr       error
-	aggregateReq       grafana.AggregateRequest
-	createDashboardArg map[string]any
-	createFolderID     int64
-	createOverwrite    bool
+	rawResult           any
+	rawErr              error
+	cloudResult         any
+	cloudErr            error
+	searchDashResult    any
+	searchDashErr       error
+	createDashResult    any
+	createDashErr       error
+	listDSResult        any
+	listDSErr           error
+	assistantChatResult any
+	assistantChatErr    error
+	assistantStatusResp any
+	assistantStatusErr  error
+	assistantSkillsResp any
+	assistantSkillsErr  error
+	assistantPrompt     string
+	assistantChatID     string
+	assistantStatusID   string
+	metricsResult       any
+	metricsErr          error
+	logsResult          any
+	logsErr             error
+	tracesResult        any
+	tracesErr           error
+	aggregateResult     grafana.AggregateSnapshot
+	aggregateErr        error
+	aggregateReq        grafana.AggregateRequest
+	createDashboardArg  map[string]any
+	createFolderID      int64
+	createOverwrite     bool
 }
 
 func (f *fakeClient) Raw(_ context.Context, _, _ string, _ any) (any, error) {
@@ -92,6 +101,21 @@ func (f *fakeClient) CreateDashboard(_ context.Context, dashboard map[string]any
 
 func (f *fakeClient) ListDatasources(_ context.Context) (any, error) {
 	return f.listDSResult, f.listDSErr
+}
+
+func (f *fakeClient) AssistantChat(_ context.Context, prompt, chatID string) (any, error) {
+	f.assistantPrompt = prompt
+	f.assistantChatID = chatID
+	return f.assistantChatResult, f.assistantChatErr
+}
+
+func (f *fakeClient) AssistantChatStatus(_ context.Context, chatID string) (any, error) {
+	f.assistantStatusID = chatID
+	return f.assistantStatusResp, f.assistantStatusErr
+}
+
+func (f *fakeClient) AssistantSkills(_ context.Context) (any, error) {
+	return f.assistantSkillsResp, f.assistantSkillsErr
 }
 
 func (f *fakeClient) MetricsRange(_ context.Context, _, _, _, _ string) (any, error) {
@@ -181,8 +205,18 @@ func TestRunHelpAndUnknown(t *testing.T) {
 		t.Fatalf("expected success for help")
 	}
 	resp := decodeJSON(t, out.String())
-	if _, ok := resp["commands"]; !ok {
+	commands, ok := resp["commands"].([]any)
+	if !ok {
 		t.Fatalf("expected commands output")
+	}
+	foundAssistant := false
+	for _, command := range commands {
+		if value, _ := command.(string); value == "assistant" {
+			foundAssistant = true
+		}
+	}
+	if !foundAssistant {
+		t.Fatalf("expected assistant command in help output")
 	}
 
 	out.Reset()
@@ -391,6 +425,75 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 	}
 	if code := app.Run(context.Background(), []string{"datasources", "list", "--bad"}); code != 1 {
 		t.Fatalf("datasources list parse should fail")
+	}
+}
+
+func TestAssistantCommands(t *testing.T) {
+	store := &fakeStore{cfg: config.Config{Token: "token"}}
+	client := &fakeClient{
+		assistantChatResult: map[string]any{"chatId": "c1"},
+		assistantStatusResp: map[string]any{"status": "completed"},
+		assistantSkillsResp: map[string]any{"items": []any{map[string]any{"name": "InvestigateIncident"}}},
+	}
+	app, out, errOut := newTestApp(store, client)
+
+	if code := app.Run(context.Background(), []string{"assistant", "chat", "--prompt", "Investigate error rate"}); code != 0 {
+		t.Fatalf("assistant chat should succeed: %s", errOut.String())
+	}
+	if client.assistantPrompt != "Investigate error rate" || client.assistantChatID != "" {
+		t.Fatalf("assistant chat args not propagated")
+	}
+	if decodeJSON(t, out.String())["chatId"] != "c1" {
+		t.Fatalf("unexpected assistant chat response")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"assistant", "chat", "--prompt", "Continue", "--chat-id", "c1"}); code != 0 {
+		t.Fatalf("assistant chat continuation should succeed")
+	}
+	if client.assistantChatID != "c1" {
+		t.Fatalf("assistant chat-id not propagated")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"assistant", "status", "--chat-id", "c1"}); code != 0 {
+		t.Fatalf("assistant status should succeed")
+	}
+	if client.assistantStatusID != "c1" {
+		t.Fatalf("assistant status chat-id not propagated")
+	}
+	if decodeJSON(t, out.String())["status"] != "completed" {
+		t.Fatalf("unexpected assistant status response")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"assistant", "skills"}); code != 0 {
+		t.Fatalf("assistant skills should succeed")
+	}
+	if decodeJSON(t, out.String())["items"] == nil {
+		t.Fatalf("unexpected assistant skills response")
+	}
+
+	if code := app.Run(context.Background(), []string{"assistant"}); code != 1 {
+		t.Fatalf("assistant usage should fail")
+	}
+	if code := app.Run(context.Background(), []string{"assistant", "chat"}); code != 1 {
+		t.Fatalf("assistant chat missing prompt should fail")
+	}
+	if code := app.Run(context.Background(), []string{"assistant", "chat", "--bad"}); code != 1 {
+		t.Fatalf("assistant chat parse should fail")
+	}
+	if code := app.Run(context.Background(), []string{"assistant", "status"}); code != 1 {
+		t.Fatalf("assistant status missing chat id should fail")
+	}
+	if code := app.Run(context.Background(), []string{"assistant", "status", "--bad"}); code != 1 {
+		t.Fatalf("assistant status parse should fail")
+	}
+	if code := app.Run(context.Background(), []string{"assistant", "skills", "extra"}); code != 1 {
+		t.Fatalf("assistant skills usage should fail")
+	}
+	if code := app.Run(context.Background(), []string{"assistant", "bad"}); code != 1 {
+		t.Fatalf("assistant unknown command should fail")
 	}
 }
 
@@ -651,6 +754,30 @@ func TestAppErrorBranches(t *testing.T) {
 	app, _, _ = newTestApp(store, client)
 	if code := app.Run(context.Background(), []string{"datasources", "list"}); code != 1 {
 		t.Fatalf("expected datasources client error")
+	}
+
+	// runAssistant auth + client error branches.
+	store = &fakeStore{cfg: config.Config{}}
+	client = &fakeClient{}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"assistant", "skills"}); code != 1 {
+		t.Fatalf("expected assistant auth error")
+	}
+	store = &fakeStore{cfg: config.Config{Token: "x"}}
+	client = &fakeClient{assistantChatErr: errors.New("assistant chat fail")}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"assistant", "chat", "--prompt", "x"}); code != 1 {
+		t.Fatalf("expected assistant chat client error")
+	}
+	client.assistantChatErr = nil
+	client.assistantStatusErr = errors.New("assistant status fail")
+	if code := app.Run(context.Background(), []string{"assistant", "status", "--chat-id", "c1"}); code != 1 {
+		t.Fatalf("expected assistant status client error")
+	}
+	client.assistantStatusErr = nil
+	client.assistantSkillsErr = errors.New("assistant skills fail")
+	if code := app.Run(context.Background(), []string{"assistant", "skills"}); code != 1 {
+		t.Fatalf("expected assistant skills client error")
 	}
 
 	// runRuntime auth + client error branches.

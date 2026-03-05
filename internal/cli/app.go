@@ -24,6 +24,9 @@ type APIClient interface {
 	SearchDashboards(ctx context.Context, query, tag string, limit int) (any, error)
 	CreateDashboard(ctx context.Context, dashboard map[string]any, folderID int64, overwrite bool) (any, error)
 	ListDatasources(ctx context.Context) (any, error)
+	AssistantChat(ctx context.Context, prompt, chatID string) (any, error)
+	AssistantChatStatus(ctx context.Context, chatID string) (any, error)
+	AssistantSkills(ctx context.Context) (any, error)
 	MetricsRange(ctx context.Context, expr, start, end, step string) (any, error)
 	LogsRange(ctx context.Context, query, start, end string, limit int) (any, error)
 	TracesSearch(ctx context.Context, query, start, end string, limit int) (any, error)
@@ -68,7 +71,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 
 	if len(rest) == 0 || rest[0] == "help" || rest[0] == "--help" || rest[0] == "-h" {
 		_ = a.emit(opts, map[string]any{
-			"commands": []string{"auth", "api", "cloud", "dashboards", "datasources", "runtime", "aggregate", "incident", "agent"},
+			"commands": []string{"auth", "api", "cloud", "dashboards", "datasources", "assistant", "runtime", "aggregate", "incident", "agent"},
 		})
 		return 0
 	}
@@ -85,6 +88,8 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		runErr = a.runDashboards(ctx, opts, rest[1:])
 	case "datasources":
 		runErr = a.runDatasources(ctx, opts, rest[1:])
+	case "assistant":
+		runErr = a.runAssistant(ctx, opts, rest[1:])
 	case "runtime":
 		runErr = a.runRuntime(ctx, opts, rest[1:])
 	case "aggregate":
@@ -350,6 +355,63 @@ func (a *App) runDatasources(ctx context.Context, opts globalOptions, args []str
 	}
 	result = filterDatasources(result, *typeFilter, *nameFilter)
 	return a.emit(opts, result)
+}
+
+func (a *App) runAssistant(ctx context.Context, opts globalOptions, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: assistant <chat|status|skills>")
+	}
+
+	cfg, err := a.requireAuthConfig()
+	if err != nil {
+		return err
+	}
+	client := a.NewClient(cfg)
+
+	switch args[0] {
+	case "chat":
+		fs := flag.NewFlagSet("assistant chat", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		prompt := fs.String("prompt", "", "assistant prompt")
+		chatID := fs.String("chat-id", "", "existing chat ID to continue")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*prompt) == "" {
+			return errors.New("--prompt is required")
+		}
+		result, err := client.AssistantChat(ctx, *prompt, *chatID)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "status":
+		fs := flag.NewFlagSet("assistant status", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		chatID := fs.String("chat-id", "", "chat ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*chatID) == "" {
+			return errors.New("--chat-id is required")
+		}
+		result, err := client.AssistantChatStatus(ctx, *chatID)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	case "skills":
+		if len(args) != 1 {
+			return errors.New("usage: assistant skills")
+		}
+		result, err := client.AssistantSkills(ctx)
+		if err != nil {
+			return err
+		}
+		return a.emit(opts, result)
+	default:
+		return fmt.Errorf("unknown assistant command: %s", args[0])
+	}
 }
 
 func (a *App) runRuntime(ctx context.Context, opts globalOptions, args []string) error {

@@ -129,6 +129,15 @@ func TestClientDomainMethods(t *testing.T) {
 	if _, err := client.ListDatasources(context.Background()); err != nil {
 		t.Fatalf("list datasources failed: %v", err)
 	}
+	if _, err := client.AssistantChat(context.Background(), "Investigate spike", "chat-1"); err != nil {
+		t.Fatalf("assistant chat failed: %v", err)
+	}
+	if _, err := client.AssistantChatStatus(context.Background(), "chat/1"); err != nil {
+		t.Fatalf("assistant chat status failed: %v", err)
+	}
+	if _, err := client.AssistantSkills(context.Background()); err != nil {
+		t.Fatalf("assistant skills failed: %v", err)
+	}
 	if _, err := client.MetricsRange(context.Background(), "up", "", "", "30s"); err != nil {
 		t.Fatalf("metrics failed: %v", err)
 	}
@@ -141,6 +150,21 @@ func TestClientDomainMethods(t *testing.T) {
 
 	if hits["/api/v1/stacks"] != 1 || hits["/api/search"] != 2 || hits["/api/dashboards/db"] != 1 || hits["/api/datasources"] != 1 {
 		t.Fatalf("unexpected hit counts: %+v", hits)
+	}
+	if hits["/api/plugins/grafana-assistant-app/resources/api/v1/assistant/chats"] != 1 {
+		t.Fatalf("expected assistant chat endpoint hit")
+	}
+	statusHits := 0
+	for path, count := range hits {
+		if strings.Contains(path, "/api/plugins/grafana-assistant-app/resources/api/v1/chats/chat") {
+			statusHits += count
+		}
+	}
+	if statusHits != 1 {
+		t.Fatalf("expected assistant status endpoint hit, got %+v", hits)
+	}
+	if hits["/api/plugins/grafana-assistant-app/resources/api/v1/assistant/skills"] != 1 {
+		t.Fatalf("expected assistant skills endpoint hit")
 	}
 	if hits["/api/prom/api/v1/query_range"] != 1 || hits["/loki/api/v1/query_range"] != 1 || hits["/api/search"] < 2 {
 		t.Fatalf("runtime endpoints not hit: %+v", hits)
@@ -183,6 +207,15 @@ func TestClientMissingBaseURLPaths(t *testing.T) {
 	if _, err := client.ListDatasources(context.Background()); !errors.Is(err, ErrMissingBaseURL) {
 		t.Fatalf("expected ErrMissingBaseURL for list datasources, got %v", err)
 	}
+	if _, err := client.AssistantChat(context.Background(), "x", ""); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for assistant chat, got %v", err)
+	}
+	if _, err := client.AssistantChatStatus(context.Background(), "c1"); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for assistant status, got %v", err)
+	}
+	if _, err := client.AssistantSkills(context.Background()); !errors.Is(err, ErrMissingBaseURL) {
+		t.Fatalf("expected ErrMissingBaseURL for assistant skills, got %v", err)
+	}
 }
 
 func TestClientInvalidURLBuildErrors(t *testing.T) {
@@ -215,6 +248,15 @@ func TestMethodInvalidURLBuildErrors(t *testing.T) {
 	}
 	if _, err := client.CreateDashboard(context.Background(), map[string]any{"title": "x"}, 1, true); err == nil {
 		t.Fatalf("expected create dashboard URL error")
+	}
+	if _, err := client.AssistantChat(context.Background(), "x", ""); err == nil {
+		t.Fatalf("expected assistant chat URL error")
+	}
+	if _, err := client.AssistantChatStatus(context.Background(), "x"); err == nil {
+		t.Fatalf("expected assistant status URL error")
+	}
+	if _, err := client.AssistantSkills(context.Background()); err == nil {
+		t.Fatalf("expected assistant skills URL error")
 	}
 	if _, err := client.MetricsRange(context.Background(), "up", "", "", ""); err == nil {
 		t.Fatalf("expected metrics URL error")
@@ -339,6 +381,56 @@ func TestMethodQueryParamBranches(t *testing.T) {
 	}
 	if !foundMetricsParams || !foundLogsNoLimit || !foundTracesNoLimit {
 		t.Fatalf("expected query param branches to execute")
+	}
+}
+
+func TestAssistantMethodsBranches(t *testing.T) {
+	requests := make([]*http.Request, 0)
+	bodies := make([]string, 0)
+	client := NewClient(config.Config{
+		BaseURL: "https://base",
+	}, doerFunc(func(r *http.Request) (*http.Response, error) {
+		requests = append(requests, r)
+		if r.Body == nil {
+			bodies = append(bodies, "")
+		} else {
+			data, _ := io.ReadAll(r.Body)
+			bodies = append(bodies, string(data))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{}`)),
+			Header:     make(http.Header),
+		}, nil
+	}))
+
+	if _, err := client.AssistantChat(context.Background(), "Investigate errors", ""); err != nil {
+		t.Fatalf("assistant chat failed: %v", err)
+	}
+	if _, err := client.AssistantChat(context.Background(), "Continue", "chat-1"); err != nil {
+		t.Fatalf("assistant chat continuation failed: %v", err)
+	}
+	if _, err := client.AssistantChatStatus(context.Background(), "chat/1"); err != nil {
+		t.Fatalf("assistant status failed: %v", err)
+	}
+	if _, err := client.AssistantSkills(context.Background()); err != nil {
+		t.Fatalf("assistant skills failed: %v", err)
+	}
+
+	if len(requests) != 4 {
+		t.Fatalf("expected 4 requests, got %d", len(requests))
+	}
+	if !strings.Contains(bodies[0], "Investigate errors") || strings.Contains(bodies[0], "chatId") {
+		t.Fatalf("expected first assistant chat body without chatId: %s", bodies[0])
+	}
+	if !strings.Contains(bodies[1], "Continue") || !strings.Contains(bodies[1], "chatId") {
+		t.Fatalf("expected second assistant chat body with chatId: %s", bodies[1])
+	}
+	if !strings.Contains(requests[2].URL.Path, "/api/plugins/grafana-assistant-app/resources/api/v1/chats/chat") {
+		t.Fatalf("unexpected assistant status path: %s", requests[2].URL.Path)
+	}
+	if requests[3].URL.Path != "/api/plugins/grafana-assistant-app/resources/api/v1/assistant/skills" {
+		t.Fatalf("unexpected assistant skills path: %s", requests[3].URL.Path)
 	}
 }
 

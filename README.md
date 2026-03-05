@@ -62,6 +62,10 @@ export PATH="$PATH:$(go env GOPATH)/bin"
   - `dashboards list --query ... --tag ... --limit ...`
   - `dashboards create --title ...` or `--template-json ...`
   - `datasources list --type ... --name ...`
+- Grafana Assistant operations
+  - `assistant chat --prompt ... [--chat-id ...]`
+  - `assistant status --chat-id ...`
+  - `assistant skills`
 - Agent workflows
   - `agent plan --goal ...`
   - `agent run --goal ...`
@@ -83,9 +87,34 @@ grafana incident analyze --goal "Investigate elevated error rate"
 # Return only what the agent needs
 grafana --fields summary.metrics_series,summary.log_streams incident analyze --goal "Latency spike"
 
+# Talk with Grafana Assistant
+grafana assistant chat --prompt "Investigate elevated error rate in checkout service"
+
+# Continue a specific assistant conversation
+grafana assistant chat --chat-id "chat_123" --prompt "Correlate with logs and traces for the last 30m"
+
+# Poll assistant chat status
+grafana assistant status --chat-id "chat_123"
+
 # Create a dashboard from JSON template
 grafana dashboards create --template-json '{"title":"Incident Overview","schemaVersion":39,"version":0,"panels":[]}'
 ```
+
+## Product Coverage Plan (WIP)
+
+Based on current Grafana product/docs research, this CLI targets:
+
+- Grafana core API (dashboards, datasources, folders, alerting, RBAC)
+- Grafana Cloud stacks/control-plane operations
+- Runtime observability data (metrics/logs/traces)
+- Grafana Assistant chat + skills for incident workflows
+- Next planned domains:
+  - IRM/incident response
+  - SLO
+  - Synthetic Monitoring
+  - k6 performance testing
+  - Asserts
+  - OnCall
 
 ## Design Inspiration
 
@@ -132,3 +161,5 @@ Example:
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md).
+
+Research references: [docs/product-research.md](docs/product-research.md).

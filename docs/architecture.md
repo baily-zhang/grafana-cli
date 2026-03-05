@@ -20,6 +20,7 @@ Build an open source Go CLI that can interact with Grafana Cloud comprehensively
 - Logs queries (LogQL range).
 - Trace search.
 - Cross-signal aggregate snapshot.
+- Grafana Assistant chat/status/skills for agent investigation loops.
 
 ## Main Grafana use cases to optimize
 
@@ -35,7 +36,11 @@ Build an open source Go CLI that can interact with Grafana Cloud comprehensively
 - Pull runtime telemetry into automation workflows.
 - Commands: `runtime metrics query`, `runtime logs query`, `runtime traces search`.
 
-4. Infrastructure automation
+4. Assistant-driven investigation
+- Delegate scoped investigations to Grafana Assistant and fetch compact status/results.
+- Commands: `assistant chat`, `assistant status`, `assistant skills`.
+
+5. Infrastructure automation
 - Use command JSON outputs in CI agents and autonomous remediation workflows.
 
 ## Inspiration from DeepWiki research

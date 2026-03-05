@@ -22,6 +22,28 @@ Most Grafana tooling is human-first. This CLI is designed for **agents** that ne
 - **Deterministic command behavior**: stable flags, stable output shapes
 - **Composability**: each command is script/agent safe
 
+## Installation
+
+### GitHub Releases (recommended)
+
+Prebuilt binaries are published automatically when commits are merged to `main`:
+
+- https://github.com/matiasvillaverde/grafana-cli/releases
+
+Download the archive for your platform, extract it, and move `grafana` (or `grafana.exe`) into your `PATH`.
+
+### Go install
+
+```bash
+go install github.com/matiasvillaverde/grafana-cli/cmd/grafana@latest
+```
+
+Then ensure your Go bin directory is in `PATH`:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
 ## Current Capabilities
 
 - Auth/session
@@ -47,7 +69,7 @@ Most Grafana tooling is human-first. This CLI is designed for **agents** that ne
 ## Quick Start
 
 ```bash
-go run ./cmd/grafana auth login \
+grafana auth login \
   --token "$GRAFANA_TOKEN" \
   --base-url "https://your-stack.grafana.net" \
   --cloud-url "https://grafana.com" \
@@ -56,13 +78,13 @@ go run ./cmd/grafana auth login \
   --traces-url "https://tempo-prod-01-eu-west-0.grafana.net"
 
 # Incident analysis (compact JSON)
-go run ./cmd/grafana incident analyze --goal "Investigate elevated error rate"
+grafana incident analyze --goal "Investigate elevated error rate"
 
 # Return only what the agent needs
-go run ./cmd/grafana --fields summary.metrics_series,summary.log_streams incident analyze --goal "Latency spike"
+grafana --fields summary.metrics_series,summary.log_streams incident analyze --goal "Latency spike"
 
 # Create a dashboard from JSON template
-go run ./cmd/grafana dashboards create --template-json '{"title":"Incident Overview","schemaVersion":39,"version":0,"panels":[]}'
+grafana dashboards create --template-json '{"title":"Incident Overview","schemaVersion":39,"version":0,"panels":[]}'
 ```
 
 ## Design Inspiration
@@ -84,6 +106,22 @@ CI enforces **100% unit test coverage**.
 ```bash
 go test ./... -covermode=atomic -coverprofile=coverage.out
 ```
+
+## Release Process
+
+Releases are automatic on every merge to `main` via GitHub Actions.
+
+Versioning is Semantic Versioning with Conventional Commit signals:
+
+- `feat:` -> minor bump
+- `fix:`, `docs:`, `chore:`, etc -> patch bump
+- `BREAKING CHANGE` in commit body or `!` in commit type -> major bump
+
+Example:
+
+- `feat(runtime): add incident root-cause summary` -> `v0.2.0`
+- `fix(cli): handle empty datasource response` -> `v0.2.1`
+- `feat(api)!: drop legacy auth flag` -> `v1.0.0`
 
 ## Roadmap
 

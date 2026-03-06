@@ -1,294 +1,249 @@
 # grafana-cli
 
-Agent-first CLI to control Grafana and Grafana Cloud.
+Agent-first CLI for Grafana and Grafana Cloud. Built for engineers working with AI coding agents like Codex and Claude Code.
 
-This project is a **WIP hackathon build by @matiasvillaverde and @marctc**.
+> **Preview** - This is a WIP hackathon build by [@matiasvillaverde](https://github.com/matiasvillaverde) and [@marctc](https://github.com/marctc).
 
-## Why This Exists
+## Why Your Agent Will Love It
 
-Grafana is one of the most important systems engineers use to understand production. But most Grafana workflows are still human-first: dashboards, clicks, long API payloads, and broad UI context.
+- **Discoverable** - `grafana schema --compact` returns a machine-readable command catalog in one bounded call
+- **Structured** - compact JSON by default with `--json`, `--jq`, and `--template` for output shaping
+- **Secure** - OS keyring token storage, `--read-only` guardrail, `--yes` for explicit destructive confirms
+- **Broad** - dashboards, alerting, logs, metrics, traces, assistant, incidents, OnCall, and SLOs
+- **Token-aware** - every command is designed to minimize token usage in agent loops
 
-Agents need a different interface. This CLI gives Grafana a small, deterministic execution surface that an agent can use repeatedly during incident response and debugging.
+## Try It
 
-This matters when an engineer is working with Codex or Claude Code and wants the agent to:
+```bash
+# Authenticate (--stack resolves Prometheus, Loki, and Tempo endpoints automatically)
+grafana auth login --token "$GRAFANA_TOKEN" --stack my-stack
 
-- understand and triage incidents
-- query logs/metrics/traces fast
-- inspect cloud stacks and data sources
-- create dashboards programmatically
-- run deterministic workflows with low token usage
+# Check what's configured
+grafana auth doctor
 
-## Why A CLI Matters For Agents
+# Search dashboards
+grafana dashboards list --query latency --tag prod
 
-This project is about **context engineering** for observability workflows.
+# Query logs from the last 30 minutes
+grafana runtime logs query --query '{app="checkout"} |= "error"' --start 30m
 
-For Grafana tasks, a focused CLI is often better than a generic tool layer:
+# Investigate an incident
+grafana incident analyze --goal "Investigate checkout latency spike"
 
-- CLI commands return narrow, task-specific JSON instead of broad tool schemas and verbose context.
-- Agents can request only the fields they need (`--fields`) to reduce token usage.
-- Command contracts are stable and deterministic, which improves reliability in long agent loops.
-- Execution is composable in scripts/CI, so agents can chain investigation steps with minimal prompt overhead.
+# Shape output for your agent
+grafana --json summary incident analyze --goal "Latency spike"
+grafana --jq '.summary' incident analyze --goal "Latency spike"
 
-MCP is still useful as an integration layer, but it is often too wide for repeated debugging loops. The goal here is to make Grafana itself **agent-first**.
-
-## Built For Codex And Claude Code
-
-Engineers can instruct Codex or Claude Code to call this CLI directly to:
-
-- debug incidents across metrics, logs, and traces
-- inspect and reason about dashboards and datasources
-- query Grafana Assistant for guided investigation
-- automate dashboard creation and remediation playbooks
-
-Example instruction to an agent:
-
-```text
-Use grafana-cli to investigate a latency spike in checkout, summarize only key metrics/log streams/trace matches, and propose a dashboard update.
+# Wrap in a deterministic envelope for downstream parsing
+grafana --agent incident analyze --goal "Latency spike"
 ```
-
-## Agent-First Contract
-
-- **Compact JSON by default** (`--output json` implied)
-- **Optional readable output**: `--output pretty`
-- **Optional tabular output**: `--output table` for common list and object responses
-- **Structured selection**: `--json`, `--jq`, and `--template` for agent-safe output shaping
-- **Token minimization**: `--fields` remains available as a compatibility alias for `--json`
-- **Schema-driven discovery**: `grafana --help`, `grafana <domain> --help`, and `grafana schema` emit machine-readable command metadata
-- **Agent envelopes**: `--agent` wraps responses in `{status,data,metadata}` for deterministic downstream handling
-- **Read-only guardrail**: `--read-only` blocks mutating commands while keeping investigation workflows available
-- **Explicit destructive confirmations**: `--yes` acknowledges destructive commands such as `auth logout`, `dashboards delete`, and raw API writes
-- **Deterministic command behavior**: stable flags, stable output shapes
-- **Composability**: each command is script/agent safe
-
-## Discovery-First Interface
-
-The CLI now treats discovery as part of the product rather than a side effect of help text.
-
-- `grafana --help` returns a compact root schema for low-token discovery loops.
-- `grafana <domain> --help` returns a compact subtree for that domain.
-- `grafana <leaf command> --help` expands automatically so the scoped command includes flags, examples, output shape, and related commands.
-- `grafana schema` returns the compact contract explicitly.
-- `grafana schema --full [path...]` returns the richer command catalog, workflows, query syntax, and time-format guidance.
-
-This is designed so an agent can answer four questions without opening external docs:
-
-- What commands exist?
-- Which flags are required?
-- What shape will the output have?
-- Which workflows are recommended for investigation?
 
 ## Installation
 
 ### GitHub Releases (recommended)
 
-Prebuilt binaries are published automatically when commits are merged to `main`:
+Download a prebuilt binary from [Releases](https://github.com/matiasvillaverde/grafana-cli/releases), extract it, and move `grafana` (or `grafana.exe`) into your `PATH`.
 
-- https://github.com/matiasvillaverde/grafana-cli/releases
-
-Download the archive for your platform, extract it, and move `grafana` (or `grafana.exe`) into your `PATH`.
+Binaries are published automatically on every merge to `main` for macOS, Linux, and Windows (`amd64` + `arm64`).
 
 ### Go install
+
+Requires Go 1.24+.
 
 ```bash
 go install github.com/matiasvillaverde/grafana-cli/cmd/grafana@latest
 ```
 
-Then ensure your Go bin directory is in `PATH`:
+Ensure your Go bin directory is in your shell profile:
 
 ```bash
+# Add to ~/.zshrc or ~/.bashrc
 export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
-## Current Capabilities
+## Command Coverage
 
-- Discovery + interface contract
-  - `schema [--compact|--full] [path...]`
-  - structured help at root and subtree level
-- Auth/session
-  - `auth login|status|doctor|logout`
-  - platform-aware token storage: native keyring first, local token file fallback
-- Context and config management
-  - `context list|use|view`
-  - `config list|get|set`
-- Raw API access
-  - `api <METHOD> <PATH> [--body JSON]`
-- Cloud inventory
-  - `cloud stacks list`
-- Investigation context
-  - `query-history list [--search ... --starred --page ... --limit ...]`
-  - `slo list [--query ... --limit ...]`
-  - `irm incidents list [--query ... --limit ...]`
-  - `oncall schedules list [--query ... --limit ...]`
-- Incident + runtime investigation
-  - `incident analyze --goal ...`
-  - `runtime metrics query --expr ...`
-  - `runtime logs query --query ...`
-  - `runtime logs aggregate --query ...`
-  - `runtime traces search --query ...`
-  - `runtime traces aggregate --query ...`
-  - `aggregate snapshot --metric-expr ... --log-query ... --trace-query ...`
-  - relative or absolute time inputs: `30m`, `now-2h`, `2026-03-06T12:00:00Z`
-- Dashboard and datasource operations
-  - `dashboards list --query ... --tag ... --limit ...`
-  - `dashboards get --uid ...`
-  - `dashboards create --title ...` or `--template-json ...`
-  - `dashboards delete --uid ...`
-  - `dashboards versions --uid ... [--limit ...]`
-  - `dashboards render --uid ... [--panel-id ...] --out ...`
-  - `datasources list --type ... --name ...`
-- Folder, annotation, and alerting reads
-  - `folders list`
-  - `folders get --uid ...`
-  - `annotations list [--dashboard-uid ... --panel-id ... --tags ...]`
-  - `alerting rules list`
-  - `alerting contact-points list`
-  - `alerting policies get`
-- Grafana Assistant operations
-  - `assistant chat --prompt ... [--chat-id ...]`
-  - `assistant status --chat-id ...`
-  - `assistant skills`
-- Agent workflows
-  - `agent plan --goal ...`
-  - `agent run --goal ...`
+<details>
+<summary><strong>Auth & Config</strong></summary>
 
-## Quick Start
+| Command | Description |
+|---------|-------------|
+| `auth login` | Store token and endpoint configuration |
+| `auth status` | Show current auth status and endpoints |
+| `auth doctor` | Diagnose missing configuration by capability |
+| `auth logout` | Clear the current context token |
+| `context list` | List configured contexts |
+| `context use <name>` | Switch the active context |
+| `context view` | Show current context configuration |
+| `config list` | List config for a context |
+| `config get <key>` | Read one config key |
+| `config set <key> <value>` | Persist one config key |
 
-```bash
-grafana --help
-grafana runtime --help
-grafana schema
-grafana schema --full runtime metrics
+</details>
 
-grafana auth login \
-  --token "$GRAFANA_TOKEN" \
-  --stack "your-stack"
+<details>
+<summary><strong>Dashboards & Datasources</strong></summary>
 
-# The token is stored outside config.json using the OS keyring when available.
+| Command | Description |
+|---------|-------------|
+| `dashboards list` | Search dashboards by query and tag |
+| `dashboards get --uid ...` | Fetch one dashboard by UID |
+| `dashboards create` | Create a dashboard from flags or `--template-json` |
+| `dashboards delete --uid ...` | Delete a dashboard by UID |
+| `dashboards versions --uid ...` | List dashboard version history |
+| `dashboards render --uid ...` | Render a dashboard or panel to PNG |
+| `datasources list` | List datasources with optional type/name filtering |
 
-# Diagnose which capabilities are configured and which endpoints are missing.
-grafana auth doctor
+</details>
 
-# Create and switch named contexts, like separate stacks or environments.
-grafana auth login --context prod --token "$GRAFANA_TOKEN" --base-url "https://prod.grafana.net"
-grafana context list
-grafana context use prod
-grafana config get base-url
-grafana config set org-id 12
+<details>
+<summary><strong>Folders, Annotations & Alerting</strong></summary>
 
-# Incident analysis (compact JSON)
-grafana incident analyze --goal "Investigate elevated error rate"
+| Command | Description |
+|---------|-------------|
+| `folders list` | List dashboard folders |
+| `folders get --uid ...` | Get one folder by UID |
+| `annotations list` | List annotations for a dashboard or panel |
+| `alerting rules list` | List alert rules |
+| `alerting contact-points list` | List alert contact points |
+| `alerting policies get` | Get the alert routing policy tree |
 
-# Pull saved exploration context from recent query history
-grafana query-history list --search checkout --from 24h --limit 20
+</details>
 
-# Inspect matching SLOs before widening an incident scope
-grafana slo list --query checkout --limit 20
+<details>
+<summary><strong>Runtime Observability</strong></summary>
 
-# Inspect recent IRM incidents and OnCall schedules around the same service
-grafana irm incidents list --query checkout --limit 10
-grafana oncall schedules list --query checkout --limit 20
+| Command | Description |
+|---------|-------------|
+| `runtime metrics query --expr ...` | Run a PromQL range query |
+| `runtime logs query --query ...` | Run a LogQL range query |
+| `runtime logs aggregate --query ...` | Summarize logs into stream and label counts |
+| `runtime traces search --query ...` | Run a TraceQL search |
+| `runtime traces aggregate --query ...` | Summarize traces into services and root operations |
+| `aggregate snapshot` | Query metrics, logs, and traces in one bounded call |
 
-# Return only what the agent needs
-grafana --json summary.metrics_series,summary.log_streams incident analyze --goal "Latency spike"
-grafana --jq '.summary' incident analyze --goal "Latency spike"
-grafana --template '{{.context}} {{.base_url}}' context view
+All runtime commands support relative time inputs: `30m`, `1h`, `now-2h`, `2026-03-06T12:00:00Z`.
 
-# Use the agent envelope for deterministic downstream parsing
-grafana --agent incident analyze --goal "Latency spike"
+</details>
 
-# Human-readable inspection for list/object responses
-grafana --output table datasources list
-grafana --output table auth doctor
+<details>
+<summary><strong>Investigation & Incidents</strong></summary>
 
-# Use relative time ranges directly
-grafana runtime logs query --query '{app="checkout"} |= "error"' --start 30m --end now
-grafana runtime logs aggregate --query '{app="checkout"} |= "error"' --start 30m
-grafana runtime traces aggregate --query '{ status = error }' --start 30m
+| Command | Description |
+|---------|-------------|
+| `incident analyze --goal ...` | Generate a playbook-driven incident summary |
+| `irm incidents list` | List IRM incident previews |
+| `oncall schedules list` | List OnCall schedules |
+| `query-history list` | Search saved Explore query history |
+| `slo list` | List SLO definitions |
 
-# Prevent accidental writes during investigation
-grafana --read-only dashboards list --query incident
+</details>
 
-# Talk with Grafana Assistant
-grafana assistant chat --prompt "Investigate elevated error rate in checkout service"
+<details>
+<summary><strong>Grafana Assistant</strong></summary>
 
-# Continue a specific assistant conversation
-grafana assistant chat --chat-id "chat_123" --prompt "Correlate with logs and traces for the last 30m"
+| Command | Description |
+|---------|-------------|
+| `assistant chat --prompt ...` | Send a prompt to Grafana Assistant |
+| `assistant status --chat-id ...` | Poll assistant chat status |
+| `assistant skills` | List available assistant skills |
 
-# Poll assistant chat status
-grafana assistant status --chat-id "chat_123"
+</details>
 
-# Create a dashboard from JSON template
-grafana dashboards create --template-json '{"title":"Incident Overview","schemaVersion":39,"version":0,"panels":[]}'
+<details>
+<summary><strong>Agent Workflows</strong></summary>
 
-# Delete a dashboard explicitly
-grafana --yes dashboards delete --uid "incident-overview"
+| Command | Description |
+|---------|-------------|
+| `agent plan --goal ...` | Return the investigation plan without executing |
+| `agent run --goal ...` | Execute the investigation plan against Grafana |
 
-# Fetch dashboard metadata
-grafana dashboards get --uid "incident-overview"
+</details>
 
-# Render a panel screenshot for agent inspection
-grafana dashboards render --uid "incident-overview" --panel-id 4 --out /tmp/incident-overview-panel.png
+<details>
+<summary><strong>Cloud & Raw API</strong></summary>
+
+| Command | Description |
+|---------|-------------|
+| `cloud stacks list` | List Grafana Cloud stacks |
+| `api <METHOD> <PATH>` | Call the raw Grafana HTTP API directly |
+
+</details>
+
+## Global Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--output` | `string` | `json` | Output format: `json`, `pretty`, `table` |
+| `--json` | `csv` | | Project only selected fields from the JSON payload |
+| `--fields` | `csv` | | Alias for `--json` |
+| `--jq` | `string` | | Apply a jq expression to the payload |
+| `--template` | `string` | | Render a Go template against the payload |
+| `--agent` | `bool` | `false` | Wrap results in `{status, data, metadata}` envelope |
+| `--read-only` | `bool` | `false` | Block commands that mutate state |
+| `--yes` | `bool` | `false` | Confirm destructive commands without prompt |
+
+## Agent Mode
+
+When `--agent` is passed, the CLI wraps every response in a deterministic envelope:
+
+```json
+{
+  "status": "ok",
+  "data": { "..." : "..." },
+  "metadata": {
+    "count": 12,
+    "truncated": false,
+    "command": "dashboards list"
+  }
+}
 ```
 
-## Product Coverage Plan (WIP)
+Metadata includes `count`, `truncated`, `command`, `next_action`, and optional `warnings`.
 
-Based on current Grafana product/docs research, this CLI targets:
+## Discovery
 
-- Grafana core API (dashboards, datasources, folders, alerting, RBAC)
-- Grafana Cloud stacks/control-plane operations
-- Runtime observability data (metrics/logs/traces) plus bounded aggregate summaries
-- Investigation context (query history, SLO definitions, IRM incident previews, and OnCall schedules)
-- Grafana Assistant chat + skills for incident workflows
-- Next planned domains:
-  - Synthetic Monitoring
-  - k6 performance testing
-  - Asserts
+The CLI treats discovery as a first-class interface - agents can understand the full command surface without external docs.
 
-## CLI Design Principles
+```bash
+grafana --help                        # Compact root schema
+grafana runtime --help                # Compact runtime subtree
+grafana runtime metrics query --help  # Expanded scoped help for one leaf command
+grafana schema                        # Bounded machine-readable contract (compact by default)
+grafana schema --full runtime metrics # Richer contract with examples, workflows, and query syntax
+```
 
-The design goal is straightforward:
-
-- explicit commands for high-frequency Grafana workflows
-- non-interactive execution for agents and CI
-- compact structured output by default
-- a raw API escape hatch for full product coverage
-
-The point is not to copy other CLIs. The point is to give agents the shortest, most reliable path to understand and operate Grafana.
+The schema includes command metadata, flag definitions, output shapes, query syntax examples, recommended workflows, best practices, and anti-patterns.
 
 ## Quality Gate
 
-CI enforces **100% unit test coverage**.
+CI enforces **100% unit test coverage** and strict linting on every PR and release.
 
 ```bash
 go test ./... -covermode=atomic -coverprofile=coverage.out
+go tool cover -func=coverage.out | tail -n 1
+$(go env GOPATH)/bin/golangci-lint run --timeout=5m
 ```
 
 ## Release Process
 
-Releases are automatic on every merge to `main` via GitHub Actions.
-
-Versioning is Semantic Versioning with Conventional Commit signals:
+Releases are automatic on every merge to `main`. Versioning follows [Conventional Commits](https://www.conventionalcommits.org/):
 
 - `feat:` -> minor bump
-- `fix:`, `docs:`, `chore:`, etc -> patch bump
-- `BREAKING CHANGE` in commit body or `!` in commit type -> major bump
-
-Example:
-
-- `feat(runtime): add incident root-cause summary` -> `v0.2.0`
-- `fix(cli): handle empty datasource response` -> `v0.2.1`
-- `feat(api)!: drop legacy auth flag` -> `v1.0.0`
+- `fix:`, `docs:`, `chore:` -> patch bump
+- `BREAKING CHANGE` or `!` -> major bump
 
 ## Roadmap
 
-- broader Grafana Cloud product coverage (alerting, access control, reporting, synthetic monitoring, OnCall, k6)
-- richer agent execution plans and remediation actions
-- **Graph RAG for past incidents** to reuse historical context during incident triage and diagnosis
+- Broader Grafana Cloud product coverage (synthetic monitoring, k6, profiles, frontend observability)
+- Richer agent execution plans and remediation actions
+- Graph RAG for past incidents to reuse historical context during triage
 
-## Architecture
+See [docs/discovery-first-plan.md](docs/discovery-first-plan.md) for the detailed plan.
 
-See [docs/architecture.md](docs/architecture.md).
+## Links
 
-Research references: [docs/product-research.md](docs/product-research.md).
-
-Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md).
+- [Architecture](docs/architecture.md)
+- [Product Research](docs/product-research.md)
+- [Contributing](CONTRIBUTING.md)
+- [Agent Guidelines](AGENTS.md)

@@ -50,10 +50,31 @@ Use grafana-cli to investigate a latency spike in checkout, summarize only key m
 
 - **Compact JSON by default** (`--output json` implied)
 - **Optional readable output**: `--output pretty`
+- **Optional tabular output**: `--output table` for common list and object responses
 - **Structured selection**: `--json`, `--jq`, and `--template` for agent-safe output shaping
 - **Token minimization**: `--fields` remains available as a compatibility alias for `--json`
+- **Schema-driven discovery**: `grafana --help`, `grafana <domain> --help`, and `grafana schema` emit machine-readable command metadata
+- **Agent envelopes**: `--agent` wraps responses in `{status,data,metadata}` for deterministic downstream handling
+- **Read-only guardrail**: `--read-only` blocks mutating commands while keeping investigation workflows available
+- **Explicit destructive confirmations**: `--yes` acknowledges destructive commands such as `auth logout`, `dashboards delete`, and raw API writes
 - **Deterministic command behavior**: stable flags, stable output shapes
 - **Composability**: each command is script/agent safe
+
+## Discovery-First Interface
+
+The CLI now treats discovery as part of the product rather than a side effect of help text.
+
+- `grafana --help` returns a compact root schema for low-token discovery loops.
+- `grafana <domain> --help` returns only the relevant subtree for that domain.
+- `grafana schema` returns the compact contract explicitly.
+- `grafana schema --full [path...]` returns the richer command catalog, workflows, query syntax, and time-format guidance.
+
+This is designed so an agent can answer four questions without opening external docs:
+
+- What commands exist?
+- Which flags are required?
+- What shape will the output have?
+- Which workflows are recommended for investigation?
 
 ## Installation
 
@@ -79,8 +100,11 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 ## Current Capabilities
 
+- Discovery + interface contract
+  - `schema [--compact|--full] [path...]`
+  - structured help at root and subtree level
 - Auth/session
-  - `auth login|status|logout`
+  - `auth login|status|doctor|logout`
   - platform-aware token storage: native keyring first, local token file fallback
 - Context and config management
   - `context list|use|view`
@@ -89,12 +113,20 @@ export PATH="$PATH:$(go env GOPATH)/bin"
   - `api <METHOD> <PATH> [--body JSON]`
 - Cloud inventory
   - `cloud stacks list`
+- Investigation context
+  - `query-history list [--search ... --starred --page ... --limit ...]`
+  - `slo list [--query ... --limit ...]`
+  - `irm incidents list [--query ... --limit ...]`
+  - `oncall schedules list [--query ... --limit ...]`
 - Incident + runtime investigation
   - `incident analyze --goal ...`
   - `runtime metrics query --expr ...`
   - `runtime logs query --query ...`
+  - `runtime logs aggregate --query ...`
   - `runtime traces search --query ...`
+  - `runtime traces aggregate --query ...`
   - `aggregate snapshot --metric-expr ... --log-query ... --trace-query ...`
+  - relative or absolute time inputs: `30m`, `now-2h`, `2026-03-06T12:00:00Z`
 - Dashboard and datasource operations
   - `dashboards list --query ... --tag ... --limit ...`
   - `dashboards get --uid ...`
@@ -121,18 +153,19 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 ## Quick Start
 
 ```bash
-grafana -help
-grafana dashboards -help
+grafana --help
+grafana runtime --help
+grafana schema
+grafana schema --full runtime metrics
 
 grafana auth login \
   --token "$GRAFANA_TOKEN" \
-  --base-url "https://your-stack.grafana.net" \
-  --cloud-url "https://grafana.com" \
-  --prom-url "https://prometheus-prod-01-eu-west-0.grafana.net" \
-  --logs-url "https://logs-prod-01-eu-west-0.grafana.net" \
-  --traces-url "https://tempo-prod-01-eu-west-0.grafana.net"
+  --stack "your-stack"
 
 # The token is stored outside config.json using the OS keyring when available.
+
+# Diagnose which capabilities are configured and which endpoints are missing.
+grafana auth doctor
 
 # Create and switch named contexts, like separate stacks or environments.
 grafana auth login --context prod --token "$GRAFANA_TOKEN" --base-url "https://prod.grafana.net"
@@ -144,10 +177,35 @@ grafana config set org-id 12
 # Incident analysis (compact JSON)
 grafana incident analyze --goal "Investigate elevated error rate"
 
+# Pull saved exploration context from recent query history
+grafana query-history list --search checkout --from 24h --limit 20
+
+# Inspect matching SLOs before widening an incident scope
+grafana slo list --query checkout --limit 20
+
+# Inspect recent IRM incidents and OnCall schedules around the same service
+grafana irm incidents list --query checkout --limit 10
+grafana oncall schedules list --query checkout --limit 20
+
 # Return only what the agent needs
 grafana --json summary.metrics_series,summary.log_streams incident analyze --goal "Latency spike"
 grafana --jq '.summary' incident analyze --goal "Latency spike"
 grafana --template '{{.context}} {{.base_url}}' context view
+
+# Use the agent envelope for deterministic downstream parsing
+grafana --agent incident analyze --goal "Latency spike"
+
+# Human-readable inspection for list/object responses
+grafana --output table datasources list
+grafana --output table auth doctor
+
+# Use relative time ranges directly
+grafana runtime logs query --query '{app="checkout"} |= "error"' --start 30m --end now
+grafana runtime logs aggregate --query '{app="checkout"} |= "error"' --start 30m
+grafana runtime traces aggregate --query '{ status = error }' --start 30m
+
+# Prevent accidental writes during investigation
+grafana --read-only dashboards list --query incident
 
 # Talk with Grafana Assistant
 grafana assistant chat --prompt "Investigate elevated error rate in checkout service"
@@ -160,6 +218,9 @@ grafana assistant status --chat-id "chat_123"
 
 # Create a dashboard from JSON template
 grafana dashboards create --template-json '{"title":"Incident Overview","schemaVersion":39,"version":0,"panels":[]}'
+
+# Delete a dashboard explicitly
+grafana --yes dashboards delete --uid "incident-overview"
 
 # Fetch dashboard metadata
 grafana dashboards get --uid "incident-overview"
@@ -174,15 +235,13 @@ Based on current Grafana product/docs research, this CLI targets:
 
 - Grafana core API (dashboards, datasources, folders, alerting, RBAC)
 - Grafana Cloud stacks/control-plane operations
-- Runtime observability data (metrics/logs/traces)
+- Runtime observability data (metrics/logs/traces) plus bounded aggregate summaries
+- Investigation context (query history, SLO definitions, IRM incident previews, and OnCall schedules)
 - Grafana Assistant chat + skills for incident workflows
 - Next planned domains:
-  - IRM/incident response
-  - SLO
   - Synthetic Monitoring
   - k6 performance testing
   - Asserts
-  - OnCall
 
 ## CLI Design Principles
 

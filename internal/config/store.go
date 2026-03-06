@@ -21,6 +21,7 @@ type Config struct {
 	PrometheusURL string `json:"prometheus_url"`
 	LogsURL       string `json:"logs_url"`
 	TracesURL     string `json:"traces_url"`
+	OnCallURL     string `json:"oncall_url"`
 	Token         string `json:"token,omitempty"`
 	TokenBackend  string `json:"-"`
 	OrgID         int64  `json:"org_id"`

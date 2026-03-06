@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,19 @@ type fakeStore struct {
 	loadErr  error
 	saveErr  error
 	clearErr error
+}
+
+type failWriter struct {
+	failAfter int
+	writes    int
+}
+
+func (f *failWriter) Write(_ []byte) (int, error) {
+	if f.writes >= f.failAfter {
+		return 0, errors.New("write failure")
+	}
+	f.writes++
+	return 1, nil
 }
 
 func (f *fakeStore) Load() (config.Config, error) {
@@ -175,6 +189,12 @@ func (f *fakeContextStore) SaveContext(name string, cfg config.Config) error {
 type fakeClient struct {
 	rawResult           any
 	rawErr              error
+	rawResponses        map[string]any
+	rawErrors           map[string]error
+	rawMethod           string
+	rawPath             string
+	rawBody             any
+	rawCalls            []string
 	cloudResult         any
 	cloudErr            error
 	searchDashResult    any
@@ -216,10 +236,22 @@ type fakeClient struct {
 	assistantStatusID   string
 	metricsResult       any
 	metricsErr          error
+	metricsExpr         string
+	metricsStart        string
+	metricsEnd          string
+	metricsStep         string
 	logsResult          any
 	logsErr             error
+	logsQuery           string
+	logsStart           string
+	logsEnd             string
+	logsLimit           int
 	tracesResult        any
 	tracesErr           error
+	tracesQuery         string
+	tracesStart         string
+	tracesEnd           string
+	tracesLimit         int
 	aggregateResult     grafana.AggregateSnapshot
 	aggregateErr        error
 	aggregateReq        grafana.AggregateRequest
@@ -228,7 +260,17 @@ type fakeClient struct {
 	createOverwrite     bool
 }
 
-func (f *fakeClient) Raw(_ context.Context, _, _ string, _ any) (any, error) {
+func (f *fakeClient) Raw(_ context.Context, method, path string, body any) (any, error) {
+	f.rawMethod = method
+	f.rawPath = path
+	f.rawBody = body
+	f.rawCalls = append(f.rawCalls, method+" "+path)
+	if err, ok := f.rawErrors[path]; ok {
+		return nil, err
+	}
+	if result, ok := f.rawResponses[path]; ok {
+		return result, nil
+	}
 	return f.rawResult, f.rawErr
 }
 
@@ -308,15 +350,27 @@ func (f *fakeClient) AssistantSkills(_ context.Context) (any, error) {
 	return f.assistantSkillsResp, f.assistantSkillsErr
 }
 
-func (f *fakeClient) MetricsRange(_ context.Context, _, _, _, _ string) (any, error) {
+func (f *fakeClient) MetricsRange(_ context.Context, expr, start, end, step string) (any, error) {
+	f.metricsExpr = expr
+	f.metricsStart = start
+	f.metricsEnd = end
+	f.metricsStep = step
 	return f.metricsResult, f.metricsErr
 }
 
-func (f *fakeClient) LogsRange(_ context.Context, _, _, _ string, _ int) (any, error) {
+func (f *fakeClient) LogsRange(_ context.Context, query, start, end string, limit int) (any, error) {
+	f.logsQuery = query
+	f.logsStart = start
+	f.logsEnd = end
+	f.logsLimit = limit
 	return f.logsResult, f.logsErr
 }
 
-func (f *fakeClient) TracesSearch(_ context.Context, _, _, _ string, _ int) (any, error) {
+func (f *fakeClient) TracesSearch(_ context.Context, query, start, end string, limit int) (any, error) {
+	f.tracesQuery = query
+	f.tracesStart = start
+	f.tracesEnd = end
+	f.tracesLimit = limit
 	return f.tracesResult, f.tracesErr
 }
 
@@ -354,7 +408,25 @@ func decodeJSONArray(t *testing.T, value string) []map[string]any {
 	return out
 }
 
+func findCommandByName(t *testing.T, commands []any, name string) map[string]any {
+	t.Helper()
+	for _, command := range commands {
+		entry, ok := command.(map[string]any)
+		if !ok {
+			continue
+		}
+		if entry["name"] == name {
+			return entry
+		}
+	}
+	t.Fatalf("command %q not found in %#v", name, commands)
+	return nil
+}
+
 func TestParseGlobalOptions(t *testing.T) {
+	t.Setenv("FORCE_AGENT_MODE", "")
+	t.Setenv("GRAFANA_CLI_AGENT_MODE", "")
+
 	opts, rest, err := parseGlobalOptions([]string{"--fields", "a,b", "--output", "pretty", "auth", "status"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -383,14 +455,24 @@ func TestParseGlobalOptions(t *testing.T) {
 	if _, _, err := parseGlobalOptions([]string{"--output", "bad"}); err == nil {
 		t.Fatalf("expected invalid output error")
 	}
+	opts, _, err = parseGlobalOptions([]string{"--output", "table", "--agent", "--read-only", "--yes", "auth", "status"})
+	if err != nil {
+		t.Fatalf("unexpected error for table/agent/read-only/yes: %v", err)
+	}
+	if opts.Output != "table" || !opts.Agent || !opts.ReadOnly || !opts.Yes {
+		t.Fatalf("unexpected opts for table/agent/read-only/yes: %+v", opts)
+	}
 }
 
 func TestParseGlobalOptionsExtended(t *testing.T) {
+	t.Setenv("FORCE_AGENT_MODE", "1")
+	t.Setenv("GRAFANA_CLI_AGENT_MODE", "")
+
 	opts, rest, err := parseGlobalOptions([]string{"--json", "a,b", "--jq", ".x", "context", "view"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if opts.Output != "json" || opts.JQ != ".x" || len(opts.Fields) != 2 {
+	if opts.Output != "json" || opts.JQ != ".x" || len(opts.Fields) != 2 || !opts.Agent {
 		t.Fatalf("unexpected opts: %+v", opts)
 	}
 	if len(rest) != 2 || rest[0] != "context" || rest[1] != "view" {
@@ -446,22 +528,19 @@ func TestRunHelpAndUnknown(t *testing.T) {
 		t.Fatalf("expected success for help")
 	}
 	resp := decodeJSON(t, out.String())
+	if resp["version"] != cliVersion {
+		t.Fatalf("expected version in discovery help, got %+v", resp)
+	}
 	commands, ok := resp["commands"].([]any)
 	if !ok {
 		t.Fatalf("expected commands output")
 	}
-	foundAssistant := false
-	foundContext := false
-	for _, command := range commands {
-		if value, _ := command.(string); value == "assistant" {
-			foundAssistant = true
-		}
-		if value, _ := command.(string); value == "context" {
-			foundContext = true
-		}
+	assistant := findCommandByName(t, commands, "assistant")
+	if assistant["description"] == "" || assistant["token_cost"] == "" {
+		t.Fatalf("expected assistant command metadata, got %+v", assistant)
 	}
-	if !foundAssistant || !foundContext {
-		t.Fatalf("expected assistant and context commands in help output")
+	if findCommandByName(t, commands, "schema")["description"] == "" {
+		t.Fatalf("expected schema command in root help")
 	}
 
 	out.Reset()
@@ -507,17 +586,43 @@ func TestAuthFlows(t *testing.T) {
 		t.Fatalf("status should succeed")
 	}
 	resp = decodeJSON(t, out.String())
-	if resp["status"] != "authenticated" {
-		t.Fatalf("expected authenticated status")
+	if resp["status"] != "authenticated" || resp["capabilities"] == nil || resp["missing"] == nil {
+		t.Fatalf("expected richer authenticated status, got %+v", resp)
 	}
 
 	out.Reset()
-	if code := app.Run(context.Background(), []string{"auth", "logout"}); code != 0 {
+	if code := app.Run(context.Background(), []string{"auth", "doctor"}); code != 0 {
+		t.Fatalf("doctor should succeed")
+	}
+	doctor := decodeJSON(t, out.String())
+	if doctor["authenticated"] != true || doctor["capabilities"] == nil {
+		t.Fatalf("unexpected doctor response: %+v", doctor)
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"auth", "logout"}); code != 1 {
+		t.Fatalf("logout should require --yes")
+	}
+	if !strings.Contains(errOut.String(), "requires --yes") {
+		t.Fatalf("expected confirmation error, got %s", errOut.String())
+	}
+
+	errOut.Reset()
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--yes", "auth", "logout"}); code != 0 {
 		t.Fatalf("logout should succeed")
 	}
 	resp = decodeJSON(t, out.String())
 	if resp["status"] != "logged_out" {
 		t.Fatalf("unexpected logout response")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"auth", "status"}); code != 0 {
+		t.Fatalf("status after logout should succeed")
+	}
+	if decodeJSON(t, out.String())["status"] != "unauthenticated" {
+		t.Fatalf("expected unauthenticated status after logout")
 	}
 
 	if code := app.Run(context.Background(), []string{"auth", "login"}); code != 1 {
@@ -544,6 +649,57 @@ func TestAuthFlows(t *testing.T) {
 	}
 }
 
+func TestAuthLoginStackInference(t *testing.T) {
+	store := &fakeStore{}
+	client := &fakeClient{
+		rawResponses: map[string]any{
+			"/api/instances/prod-observability/datasources": []any{
+				map[string]any{"type": "prometheus", "url": "https://prom.grafana.net"},
+				map[string]any{"type": "loki", "url": "https://logs.grafana.net"},
+				map[string]any{"type": "tempo", "url": "https://traces.grafana.net"},
+			},
+			"/api/instances/prod-observability/connections": []any{
+				map[string]any{"type": "oncall", "oncallApiUrl": "https://oncall.grafana.net"},
+			},
+		},
+	}
+	app, out, errOut := newTestApp(store, client)
+
+	if code := app.Run(context.Background(), []string{"auth", "login", "--token", "abc", "--stack", "https://prod-observability.grafana.net"}); code != 0 {
+		t.Fatalf("stack auth login should succeed: %s", errOut.String())
+	}
+	resp := decodeJSON(t, out.String())
+	if resp["base_url"] != "https://prod-observability.grafana.net" || resp["prometheus_url"] != "https://prom.grafana.net" || resp["oncall_url"] != "https://oncall.grafana.net" {
+		t.Fatalf("expected inferred endpoints in login response, got %+v", resp)
+	}
+	if store.cfg.BaseURL != "https://prod-observability.grafana.net" || store.cfg.PrometheusURL != "https://prom.grafana.net" || store.cfg.OnCallURL != "https://oncall.grafana.net" {
+		t.Fatalf("expected inferred endpoints in stored config, got %+v", store.cfg)
+	}
+	if len(client.rawCalls) != 2 {
+		t.Fatalf("expected two cloud discovery calls, got %+v", client.rawCalls)
+	}
+
+	out.Reset()
+	client = &fakeClient{
+		rawErrors: map[string]error{
+			"/api/instances/prod-observability/datasources": errors.New("discovery failed"),
+		},
+	}
+	app, out, errOut = newTestApp(&fakeStore{}, client)
+	if code := app.Run(context.Background(), []string{"auth", "login", "--token", "abc", "--stack", "prod-observability", "--oncall-url", "https://manual-oncall.grafana.net"}); code != 0 {
+		t.Fatalf("stack auth login with partial discovery should succeed: %s", errOut.String())
+	}
+	resp = decodeJSON(t, out.String())
+	warnings, ok := resp["warnings"].([]any)
+	if !ok || len(warnings) != 1 {
+		t.Fatalf("expected discovery warnings, got %+v", resp)
+	}
+
+	if code := app.Run(context.Background(), []string{"auth", "login", "--token", "abc", "--stack", "https://example.com"}); code != 1 {
+		t.Fatalf("invalid stack host should fail")
+	}
+}
+
 func TestCommandErrorsFromStore(t *testing.T) {
 	store := &fakeStore{loadErr: errors.New("load fail")}
 	client := &fakeClient{}
@@ -554,6 +710,13 @@ func TestCommandErrorsFromStore(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "load fail") {
 		t.Fatalf("expected load fail error")
+	}
+	errOut.Reset()
+	if code := app.Run(context.Background(), []string{"auth", "doctor"}); code != 1 {
+		t.Fatalf("expected doctor failure")
+	}
+	if !strings.Contains(errOut.String(), "load fail") {
+		t.Fatalf("expected doctor load fail error")
 	}
 
 	store = &fakeStore{cfg: config.Config{Token: "x"}, saveErr: errors.New("save fail")}
@@ -567,7 +730,7 @@ func TestCommandErrorsFromStore(t *testing.T) {
 
 	store = &fakeStore{cfg: config.Config{Token: "x"}, clearErr: errors.New("clear fail")}
 	app, _, errOut = newTestApp(store, client)
-	if code := app.Run(context.Background(), []string{"auth", "logout"}); code != 1 {
+	if code := app.Run(context.Background(), []string{"--yes", "auth", "logout"}); code != 1 {
 		t.Fatalf("expected clear failure")
 	}
 	if !strings.Contains(errOut.String(), "clear fail") {
@@ -623,8 +786,12 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 	if decodeJSON(t, out.String())["items"] == nil {
 		t.Fatalf("unexpected cloud output")
 	}
-	if code := app.Run(context.Background(), []string{"cloud"}); code != 1 {
-		t.Fatalf("cloud usage should fail")
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud"}); code != 0 {
+		t.Fatalf("cloud help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected cloud discovery output")
 	}
 	if code := app.Run(context.Background(), []string{"cloud", "bad"}); code != 1 {
 		t.Fatalf("unknown cloud should fail")
@@ -655,8 +822,12 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"dashboards", "create"}); code != 1 {
 		t.Fatalf("missing dashboard create flags should fail")
 	}
-	if code := app.Run(context.Background(), []string{"dashboards"}); code != 1 {
-		t.Fatalf("missing dashboards subcommand should fail")
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"dashboards"}); code != 0 {
+		t.Fatalf("dashboards help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected dashboards discovery output")
 	}
 	if code := app.Run(context.Background(), []string{"dashboards", "bad"}); code != 1 {
 		t.Fatalf("unknown dashboard command should fail")
@@ -705,7 +876,7 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	}
 
 	out.Reset()
-	if code := app.Run(context.Background(), []string{"dashboards", "delete", "--uid", "ops"}); code != 0 {
+	if code := app.Run(context.Background(), []string{"--yes", "dashboards", "delete", "--uid", "ops"}); code != 0 {
 		t.Fatalf("dashboard delete should succeed")
 	}
 	if decodeJSON(t, out.String())["status"] != "deleted" {
@@ -814,7 +985,7 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"dashboards", "get"}); code != 1 {
 		t.Fatalf("dashboard get missing uid should fail")
 	}
-	if code := app.Run(context.Background(), []string{"dashboards", "delete"}); code != 1 {
+	if code := app.Run(context.Background(), []string{"--yes", "dashboards", "delete"}); code != 1 {
 		t.Fatalf("dashboard delete missing uid should fail")
 	}
 	if code := app.Run(context.Background(), []string{"dashboards", "versions"}); code != 1 {
@@ -829,7 +1000,7 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"dashboards", "get", "--bad"}); code != 1 {
 		t.Fatalf("dashboard get parse should fail")
 	}
-	if code := app.Run(context.Background(), []string{"dashboards", "delete", "--bad"}); code != 1 {
+	if code := app.Run(context.Background(), []string{"--yes", "dashboards", "delete", "--bad"}); code != 1 {
 		t.Fatalf("dashboard delete parse should fail")
 	}
 	if code := app.Run(context.Background(), []string{"dashboards", "versions", "--bad"}); code != 1 {
@@ -855,8 +1026,12 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 		t.Fatalf("dashboard render directory path should fail")
 	}
 
-	if code := app.Run(context.Background(), []string{"folders"}); code != 1 {
-		t.Fatalf("folders usage should fail")
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"folders"}); code != 0 {
+		t.Fatalf("folders help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected folders discovery output")
 	}
 	if code := app.Run(context.Background(), []string{"folders", "list", "extra"}); code != 1 {
 		t.Fatalf("folders list usage should fail")
@@ -871,8 +1046,8 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 		t.Fatalf("folders unknown command should fail")
 	}
 
-	if code := app.Run(context.Background(), []string{"annotations"}); code != 1 {
-		t.Fatalf("annotations usage should fail")
+	if code := app.Run(context.Background(), []string{"annotations"}); code != 0 {
+		t.Fatalf("annotations help should succeed")
 	}
 	if code := app.Run(context.Background(), []string{"annotations", "bad"}); code != 1 {
 		t.Fatalf("annotations unknown command should fail")
@@ -881,11 +1056,14 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 		t.Fatalf("annotations parse should fail")
 	}
 
-	if code := app.Run(context.Background(), []string{"alerting"}); code != 1 {
-		t.Fatalf("alerting usage should fail")
+	if code := app.Run(context.Background(), []string{"alerting"}); code != 0 {
+		t.Fatalf("alerting help should succeed")
 	}
 	if code := app.Run(context.Background(), []string{"alerting", "rules", "bad"}); code != 1 {
 		t.Fatalf("alerting rules usage should fail")
+	}
+	if code := app.Run(context.Background(), []string{"alerting", "rules"}); code != 1 {
+		t.Fatalf("alerting rules missing verb should fail")
 	}
 	if code := app.Run(context.Background(), []string{"alerting", "contact-points", "bad"}); code != 1 {
 		t.Fatalf("alerting contact points usage should fail")
@@ -920,6 +1098,8 @@ func TestGroupHelpWithoutAuth(t *testing.T) {
 		{"runtime", "-help"},
 		{"aggregate", "-help"},
 		{"incident", "-help"},
+		{"irm", "-help"},
+		{"oncall", "-help"},
 		{"agent", "-help"},
 	} {
 		out.Reset()
@@ -929,6 +1109,699 @@ func TestGroupHelpWithoutAuth(t *testing.T) {
 		}
 		if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
 			t.Fatalf("expected commands output for %v", args)
+		}
+	}
+}
+
+func TestSchemaCommandAndNestedHelp(t *testing.T) {
+	store := &fakeStore{}
+	client := &fakeClient{}
+	app, out, errOut := newTestApp(store, client)
+
+	if code := app.Run(context.Background(), []string{"schema", "--compact"}); code != 0 {
+		t.Fatalf("schema compact should succeed: %s", errOut.String())
+	}
+	root := decodeJSON(t, out.String())
+	if root["version"] != cliVersion {
+		t.Fatalf("expected schema version, got %+v", root)
+	}
+	if _, ok := root["best_practices"]; ok {
+		t.Fatalf("did not expect expanded docs in compact schema")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"schema"}); code != 0 {
+		t.Fatalf("schema default should succeed: %s", errOut.String())
+	}
+	if _, ok := decodeJSON(t, out.String())["best_practices"]; ok {
+		t.Fatalf("schema default should stay compact")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"schema", "--full", "runtime"}); code != 0 {
+		t.Fatalf("schema full runtime should succeed: %s", errOut.String())
+	}
+	runtimeSchema := decodeJSON(t, out.String())
+	if runtimeSchema["scope"] != "runtime" {
+		t.Fatalf("expected runtime scope, got %+v", runtimeSchema)
+	}
+	if _, ok := runtimeSchema["query_syntax"].(map[string]any)["metrics"]; !ok {
+		t.Fatalf("expected runtime query syntax, got %+v", runtimeSchema["query_syntax"])
+	}
+	if _, ok := runtimeSchema["best_practices"].([]any); !ok {
+		t.Fatalf("expected expanded runtime schema docs")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"runtime", "metrics", "query", "--help"}); code != 0 {
+		t.Fatalf("nested leaf help should succeed: %s", errOut.String())
+	}
+	leaf := decodeJSON(t, out.String())
+	if leaf["scope"] != "runtime metrics query" {
+		t.Fatalf("expected nested help scope, got %+v", leaf)
+	}
+	commands := leaf["commands"].([]any)
+	if len(commands) != 1 {
+		t.Fatalf("expected one leaf command, got %+v", commands)
+	}
+	command := commands[0].(map[string]any)
+	if command["name"] != "query" {
+		t.Fatalf("expected leaf command metadata, got %+v", command)
+	}
+	if _, ok := leaf["query_syntax"].(map[string]any)["metrics"]; !ok {
+		t.Fatalf("expected metrics query syntax in leaf help")
+	}
+
+	if code := app.Run(context.Background(), []string{"schema", "--bad"}); code != 1 {
+		t.Fatalf("schema should fail for unknown flag")
+	}
+	if code := app.Run(context.Background(), []string{"schema", "--compact", "--full"}); code != 1 {
+		t.Fatalf("schema should fail for conflicting compact/full flags")
+	}
+}
+
+func TestDiscoveryHelpers(t *testing.T) {
+	payload, err := buildDiscoveryPayload([]string{"runtime", "logs"}, false)
+	if err != nil {
+		t.Fatalf("unexpected discovery payload error: %v", err)
+	}
+	if payload["scope"] != "runtime logs" {
+		t.Fatalf("expected logs scope, got %+v", payload)
+	}
+	if _, ok := payload["query_syntax"].(map[string]string); !ok {
+		t.Fatalf("expected logs query syntax map, got %#v", payload["query_syntax"])
+	}
+	commands := payload["commands"].([]map[string]any)
+	if commands[0]["output_shape"] == "" {
+		t.Fatalf("expected full discovery payload to include output shape")
+	}
+
+	if _, err := buildDiscoveryPayload([]string{"missing"}, true); err == nil {
+		t.Fatalf("expected unknown schema path error")
+	}
+
+	path, ok := requestedHelpPath([]string{"dashboards", "get", "--help"})
+	if !ok || strings.Join(path, " ") != "dashboards get" {
+		t.Fatalf("unexpected help path: ok=%v path=%v", ok, path)
+	}
+	if path, ok := requestedHelpPath([]string{"dashboards", "get"}); ok || path != nil {
+		t.Fatalf("unexpected help path without help flag: ok=%v path=%v", ok, path)
+	}
+	if strings.Join(discoveryPathFromArgs([]string{"api", "GET", "/api/test"}), " ") != "api" {
+		t.Fatalf("expected api command path")
+	}
+	if workflows := discoveryWorkflows([]string{"dashboards"}); workflows != nil {
+		t.Fatalf("expected no workflows for unrelated discovery scope, got %+v", workflows)
+	}
+}
+
+func TestDiscoveryPayloadBudgets(t *testing.T) {
+	compactRoot, err := buildDiscoveryPayload(nil, true)
+	if err != nil {
+		t.Fatalf("unexpected compact root payload error: %v", err)
+	}
+	fullRoot, err := buildDiscoveryPayload(nil, false)
+	if err != nil {
+		t.Fatalf("unexpected full root payload error: %v", err)
+	}
+	compactBytes, err := json.Marshal(compactRoot)
+	if err != nil {
+		t.Fatalf("unexpected compact root marshal error: %v", err)
+	}
+	fullBytes, err := json.Marshal(fullRoot)
+	if err != nil {
+		t.Fatalf("unexpected full root marshal error: %v", err)
+	}
+	if len(compactBytes) >= len(fullBytes) {
+		t.Fatalf("expected compact discovery payload to be smaller than full: compact=%d full=%d", len(compactBytes), len(fullBytes))
+	}
+	if len(compactBytes) > 20000 {
+		t.Fatalf("compact discovery payload budget exceeded: %d bytes", len(compactBytes))
+	}
+	if _, ok := compactRoot["workflows"]; ok {
+		t.Fatalf("compact discovery payload should omit workflows")
+	}
+	workflows, ok := fullRoot["workflows"].([]discoveryWorkflow)
+	if !ok || len(workflows) == 0 || workflows[0].TokenCost == "" {
+		t.Fatalf("expected full discovery workflows with token cost, got %+v", fullRoot["workflows"])
+	}
+}
+
+func TestAuthDoctorPayloadAndReadOnly(t *testing.T) {
+	doctor := authDoctorPayload("prod", config.Config{
+		BaseURL:      "https://stack.grafana.net",
+		Token:        "token",
+		TokenBackend: "keyring",
+	})
+	if doctor["authenticated"] != true {
+		t.Fatalf("expected authenticated doctor payload, got %+v", doctor)
+	}
+	if len(doctor["missing"].([]string)) == 0 {
+		t.Fatalf("expected missing capabilities for partial config")
+	}
+	if len(doctor["capabilities"].([]map[string]any)) != 9 {
+		t.Fatalf("expected capability matrix, got %+v", doctor["capabilities"])
+	}
+	if doctor["oncall_url"] != "" {
+		t.Fatalf("expected empty oncall url in partial doctor payload, got %+v", doctor)
+	}
+
+	if err := enforceReadOnly([]string{"dashboards", "create", "--title", "Ops"}); err == nil {
+		t.Fatalf("expected read-only enforcement for dashboard create")
+	}
+	if err := enforceConfirmation([]string{"auth", "logout"}); err == nil {
+		t.Fatalf("expected confirmation enforcement for auth logout")
+	}
+	if err := enforceConfirmation([]string{"dashboards", "delete", "--uid", "ops"}); err == nil {
+		t.Fatalf("expected confirmation enforcement for dashboard delete")
+	}
+	if err := enforceConfirmation([]string{"api", "POST", "/api/test"}); err == nil {
+		t.Fatalf("expected confirmation enforcement for api POST")
+	}
+	if err := enforceConfirmation([]string{"api", "GET", "/api/test"}); err != nil {
+		t.Fatalf("expected api GET to bypass confirmation: %v", err)
+	}
+	if err := enforceConfirmation([]string{"dashboards", "delete", "--help"}); err != nil {
+		t.Fatalf("expected help to bypass confirmation: %v", err)
+	}
+	if err := enforceReadOnly([]string{"api", "POST", "/api/test"}); err == nil {
+		t.Fatalf("expected read-only enforcement for api POST")
+	}
+	if err := enforceReadOnly([]string{"api", "GET", "/api/test"}); err != nil {
+		t.Fatalf("expected api GET to be allowed in read-only mode: %v", err)
+	}
+	if err := enforceReadOnly([]string{"dashboards", "get", "--help"}); err != nil {
+		t.Fatalf("expected help to bypass read-only enforcement: %v", err)
+	}
+
+	store := &fakeStore{cfg: config.Config{Token: "token"}}
+	client := &fakeClient{rawResult: map[string]any{"ok": true}}
+	app, _, errOut := newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"--read-only", "dashboards", "create", "--title", "Ops"}); code != 1 {
+		t.Fatalf("expected read-only dashboards create failure")
+	}
+	if !strings.Contains(errOut.String(), "blocked by --read-only") {
+		t.Fatalf("expected read-only error, got %q", errOut.String())
+	}
+	errOut.Reset()
+	if code := app.Run(context.Background(), []string{"--read-only", "api", "GET", "/api/test"}); code != 0 {
+		t.Fatalf("expected read-only api GET success, err=%q", errOut.String())
+	}
+	errOut.Reset()
+	if code := app.Run(context.Background(), []string{"dashboards", "delete", "--uid", "ops"}); code != 1 {
+		t.Fatalf("expected confirmation failure for dashboard delete")
+	}
+	if !strings.Contains(errOut.String(), "requires --yes") {
+		t.Fatalf("expected --yes error, got %q", errOut.String())
+	}
+}
+
+func TestAgentEnvelopeAndTableOutput(t *testing.T) {
+	store := &fakeStore{cfg: config.Config{Token: "token"}}
+	client := &fakeClient{
+		searchDashResult: []any{map[string]any{"uid": "ops"}},
+		listDSResult:     []any{map[string]any{"name": "loki", "type": "loki"}},
+	}
+	app, out, errOut := newTestApp(store, client)
+
+	if code := app.Run(context.Background(), []string{"--agent", "dashboards", "list", "--limit", "1"}); code != 0 {
+		t.Fatalf("agent envelope should succeed: %s", errOut.String())
+	}
+	envelope := decodeJSON(t, out.String())
+	if envelope["status"] != "success" {
+		t.Fatalf("expected success envelope, got %+v", envelope)
+	}
+	metadata := envelope["metadata"].(map[string]any)
+	if metadata["command"] != "dashboards list" {
+		t.Fatalf("expected command metadata, got %+v", metadata)
+	}
+	if metadata["truncated"] != true || metadata["count"] != float64(1) {
+		t.Fatalf("expected truncation metadata, got %+v", metadata)
+	}
+	if metadata["next_action"] == "" {
+		t.Fatalf("expected next action guidance, got %+v", metadata)
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--output", "table", "datasources", "list"}); code != 0 {
+		t.Fatalf("table output should succeed: %s", errOut.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected table header and row, got %q", out.String())
+	}
+	if !strings.Contains(lines[0], "name") || !strings.Contains(lines[0], "type") {
+		t.Fatalf("expected table header, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "loki") {
+		t.Fatalf("expected datasource row, got %q", lines[1])
+	}
+}
+
+func TestTimeNormalizationHelpers(t *testing.T) {
+	now := time.Date(2026, 3, 6, 14, 0, 0, 0, time.UTC)
+	if got := normalizeTimeValue(now, "now"); got != "2026-03-06T14:00:00Z" {
+		t.Fatalf("unexpected now normalization: %s", got)
+	}
+	if got := normalizeTimeValue(now, "30m"); got != "2026-03-06T13:30:00Z" {
+		t.Fatalf("unexpected 30m normalization: %s", got)
+	}
+	if got := normalizeTimeValue(now, "now-2h"); got != "2026-03-06T12:00:00Z" {
+		t.Fatalf("unexpected now-2h normalization: %s", got)
+	}
+	if got := normalizeTimeValue(now, "2026-03-06T11:00:00Z"); got != "2026-03-06T11:00:00Z" {
+		t.Fatalf("unexpected RFC3339 normalization: %s", got)
+	}
+	if got := normalizeTimeValue(now, "1700000000"); got != "1700000000" {
+		t.Fatalf("expected unix timestamp passthrough, got %s", got)
+	}
+	start, end := normalizeTimeRange(now, "", "", time.Hour)
+	if start != "2026-03-06T13:00:00Z" || end != "2026-03-06T14:00:00Z" {
+		t.Fatalf("unexpected default range: start=%s end=%s", start, end)
+	}
+	start, end = normalizeTimeRange(now, "", "2026-03-06T10:00:00Z", time.Hour)
+	if start != "2026-03-06T09:00:00Z" || end != "2026-03-06T10:00:00Z" {
+		t.Fatalf("unexpected anchored range: start=%s end=%s", start, end)
+	}
+
+	if duration, ok := parseRelativeDuration("5 minutes"); !ok || duration != 5*time.Minute {
+		t.Fatalf("expected 5 minute relative duration, got %v ok=%v", duration, ok)
+	}
+	if _, ok := parseRelativeDuration("garbage"); ok {
+		t.Fatalf("unexpected parse success for invalid duration")
+	}
+}
+
+func TestDiscoveryAndRenderHelpersCoverage(t *testing.T) {
+	if syntax := discoveryQuerySyntax([]string{"runtime", "traces"}); len(syntax) != 1 || syntax["traces"] == "" {
+		t.Fatalf("expected traces-only syntax, got %+v", syntax)
+	}
+	if syntax := discoveryQuerySyntax([]string{"dashboards"}); syntax != nil {
+		t.Fatalf("expected no query syntax for dashboards, got %+v", syntax)
+	}
+
+	withOptional := fullCommandPayload(discoveryCommand{
+		Name:            "x",
+		Description:     "desc",
+		ReadOnly:        true,
+		OutputShape:     `{"ok":true}`,
+		Examples:        []string{"grafana x"},
+		RelatedCommands: []string{"schema"},
+	}, nil)
+	if withOptional["output_shape"] == "" || len(withOptional["examples"].([]string)) != 1 {
+		t.Fatalf("expected optional fields in full payload, got %+v", withOptional)
+	}
+	withoutOptional := fullCommandPayload(discoveryCommand{Name: "y", Description: "desc", ReadOnly: true}, nil)
+	if _, ok := withoutOptional["output_shape"]; ok {
+		t.Fatalf("did not expect output shape in sparse full payload")
+	}
+
+	if _, ok := findDiscoveryCommand(discoveryCatalog(), []string{"runtime", "missing"}); ok {
+		t.Fatalf("unexpected discovery match for missing child")
+	}
+	if _, ok := findDiscoveryCommand(discoveryCatalog(), nil); ok {
+		t.Fatalf("unexpected discovery match for empty path")
+	}
+	if len(discoveryPathFromArgs(nil)) != 0 {
+		t.Fatalf("expected empty discovery path for nil args")
+	}
+	if len(discoveryPathFromArgs([]string{"--help"})) != 0 {
+		t.Fatalf("expected empty discovery path for help-only args")
+	}
+
+	if meta := withCommandMetadata(nil, "runtime logs query"); meta.Command != "runtime logs query" {
+		t.Fatalf("expected command metadata on nil input, got %+v", meta)
+	}
+	if meta := collectionMetadata("", "scalar", 0, ""); meta != nil {
+		t.Fatalf("expected nil metadata for scalar payload with no hints, got %+v", meta)
+	}
+	if count, ok := inferMetadataCount(map[string]any{"data": map[string]any{"results": []any{1, 2}}}); !ok || count != 2 {
+		t.Fatalf("expected nested metadata count, got count=%d ok=%v", count, ok)
+	}
+	if _, ok := inferMetadataCount("scalar"); ok {
+		t.Fatalf("unexpected metadata count for scalar payload")
+	}
+
+	var out strings.Builder
+	if err := renderTable(&out, []any{}); err != nil {
+		t.Fatalf("expected empty table render to succeed: %v", err)
+	}
+	if strings.TrimSpace(out.String()) != "No rows" {
+		t.Fatalf("unexpected empty table output: %q", out.String())
+	}
+	if rows := rowsForTable(map[string]any{"items": []any{map[string]any{"id": 1, "attributes": map[string]any{"name": "ops"}}}}); len(rows) != 1 || rows[0]["attributes.name"] != "ops" {
+		t.Fatalf("expected flattened rows, got %+v", rows)
+	}
+	if rows := rowsForTable(map[string]any{"data": []any{map[string]any{"id": 2}}}); len(rows) != 1 || rows[0]["id"] != 2 {
+		t.Fatalf("expected nested data rows, got %+v", rows)
+	}
+	if rows := rowsForTable(map[string]any{"name": "ops"}); len(rows) != 1 || rows[0]["name"] != "ops" {
+		t.Fatalf("expected single object row, got %+v", rows)
+	}
+	if rows := rowsForTable("scalar"); rows != nil {
+		t.Fatalf("expected nil rows for scalar payload, got %+v", rows)
+	}
+	if flattened := flattenTableRow(map[string]any{"a": map[string]any{"b": "c"}}, ""); flattened["a.b"] != "c" {
+		t.Fatalf("expected flattened nested row, got %+v", flattened)
+	}
+	if got := tableCell(nil); got != "" {
+		t.Fatalf("unexpected nil cell: %q", got)
+	}
+	if got := tableCell("ops"); got != "ops" {
+		t.Fatalf("unexpected string cell: %q", got)
+	}
+	if got := tableCell(true); got != "true" {
+		t.Fatalf("unexpected bool cell: %q", got)
+	}
+	if got := tableCell(false); got != "false" {
+		t.Fatalf("unexpected false cell: %q", got)
+	}
+	if got := tableCell(3); got != "3" {
+		t.Fatalf("unexpected numeric cell: %q", got)
+	}
+	if got := tableCell([]any{1, 2}); got != "[2 items]" {
+		t.Fatalf("unexpected array cell: %q", got)
+	}
+	if got := tableCell(map[string]any{"x": 1}); got != `{"x":1}` {
+		t.Fatalf("unexpected object cell: %q", got)
+	}
+	if got := tableCell(func() {}); !strings.Contains(got, "0x") {
+		t.Fatalf("expected fmt fallback for unsupported value, got %q", got)
+	}
+
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"5s", 5 * time.Second},
+		{"2hours", 2 * time.Hour},
+		{"3days", 72 * time.Hour},
+		{"1week", 7 * 24 * time.Hour},
+		{"-5m", 5 * time.Minute},
+	} {
+		if got, ok := parseRelativeDuration(tc.value); !ok || got != tc.want {
+			t.Fatalf("unexpected duration for %s: got=%v ok=%v", tc.value, got, ok)
+		}
+	}
+	if _, ok := parseRelativeDuration("999999999999999999999h"); ok {
+		t.Fatalf("expected parse failure for overflowing duration")
+	}
+}
+
+func TestAdditionalCoveragePaths(t *testing.T) {
+	unauthenticatedDoctor := authDoctorPayload("default", config.Config{})
+	if unauthenticatedDoctor["authenticated"] != false {
+		t.Fatalf("expected unauthenticated doctor payload, got %+v", unauthenticatedDoctor)
+	}
+	if len(unauthenticatedDoctor["suggestions"].([]string)) == 0 {
+		t.Fatalf("expected auth suggestions for unauthenticated payload")
+	}
+
+	if err := enforceReadOnly(nil); err != nil {
+		t.Fatalf("expected nil args to bypass read-only enforcement: %v", err)
+	}
+	if err := enforceConfirmation(nil); err != nil {
+		t.Fatalf("expected nil args to bypass confirmation enforcement: %v", err)
+	}
+	if err := enforceReadOnly([]string{"api"}); err != nil {
+		t.Fatalf("expected api command without method to bypass enforcement: %v", err)
+	}
+	if err := enforceConfirmation([]string{"api"}); err != nil {
+		t.Fatalf("expected api command without method to bypass confirmation enforcement: %v", err)
+	}
+	if err := enforceReadOnly([]string{"dashboards", "get", "--uid", "ops"}); err != nil {
+		t.Fatalf("expected read-only command to be allowed: %v", err)
+	}
+	if err := enforceConfirmation([]string{"dashboards", "get", "--uid", "ops"}); err != nil {
+		t.Fatalf("expected non-destructive command to bypass confirmation: %v", err)
+	}
+	if err := enforceReadOnly([]string{"unknown"}); err != nil {
+		t.Fatalf("expected unknown command path to bypass read-only enforcement: %v", err)
+	}
+	if err := enforceConfirmation([]string{"unknown"}); err != nil {
+		t.Fatalf("expected unknown command path to bypass confirmation enforcement: %v", err)
+	}
+
+	store := &fakeStore{}
+	app, out, _ := newTestApp(store, &fakeClient{})
+	if err := app.emitWithMetadata(globalOptions{Agent: true}, []any{map[string]any{"id": 1}}, nil); err != nil {
+		t.Fatalf("expected emitWithMetadata to build metadata from nil meta, got %v", err)
+	}
+	nilMetaEnvelope := decodeJSON(t, out.String())
+	if nilMetaEnvelope["metadata"].(map[string]any)["count"] != float64(1) {
+		t.Fatalf("expected inferred count from nil meta, got %+v", nilMetaEnvelope)
+	}
+
+	out.Reset()
+	if err := app.emitWithMetadata(globalOptions{Agent: true}, []any{map[string]any{"id": 1}}, &responseMetadata{}); err != nil {
+		t.Fatalf("expected emitWithMetadata to infer counts, got %v", err)
+	}
+	envelope := decodeJSON(t, out.String())
+	if envelope["metadata"].(map[string]any)["count"] != float64(1) {
+		t.Fatalf("expected inferred count, got %+v", envelope)
+	}
+
+	out.Reset()
+	if err := app.emitHelp(globalOptions{}, []string{"missing"}, true); err == nil {
+		t.Fatalf("expected emitHelp to fail for missing path")
+	}
+
+	out.Reset()
+	if err := renderTable(out, map[string]any{"name": "ops", "enabled": true}); err != nil {
+		t.Fatalf("expected object table render to succeed: %v", err)
+	}
+	if !strings.Contains(out.String(), "name") || !strings.Contains(out.String(), "ops") {
+		t.Fatalf("unexpected object table render: %q", out.String())
+	}
+
+	if err := renderTable(&failWriter{failAfter: 0}, []any{}); err == nil {
+		t.Fatalf("expected renderTable empty write failure")
+	}
+	if err := renderTable(&failWriter{failAfter: 0}, map[string]any{"name": "ops"}); err == nil {
+		t.Fatalf("expected renderTable header write failure")
+	}
+	if err := renderTable(&failWriter{failAfter: 1}, map[string]any{"name": "ops"}); err == nil {
+		t.Fatalf("expected renderTable row write failure")
+	}
+}
+
+func TestNoArgDiscoveryPaths(t *testing.T) {
+	store := &fakeContextStore{
+		current: "default",
+		cfgs:    map[string]config.Config{"default": {}},
+	}
+	app, out, errOut := newTestApp(store, &fakeClient{})
+
+	for _, args := range [][]string{
+		{"auth"},
+		{"context"},
+		{"config"},
+		{"api"},
+		{"cloud"},
+		{"dashboards"},
+		{"datasources"},
+		{"folders"},
+		{"annotations"},
+		{"alerting"},
+		{"query-history"},
+		{"slo"},
+		{"irm"},
+		{"oncall"},
+		{"assistant"},
+		{"runtime"},
+		{"aggregate"},
+		{"incident"},
+		{"agent"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		if code := app.Run(context.Background(), args); code != 0 {
+			t.Fatalf("expected discovery help for %v, err=%s", args, errOut.String())
+		}
+		resp := decodeJSON(t, out.String())
+		if _, ok := resp["commands"]; !ok {
+			t.Fatalf("expected discovery commands for %v, got %+v", args, resp)
+		}
+	}
+}
+
+func TestQueryHistoryAndSLOCommands(t *testing.T) {
+	store := &fakeStore{cfg: config.Config{Token: "token"}}
+	client := &fakeClient{
+		rawResult: map[string]any{
+			"result": map[string]any{
+				"queryHistory": []any{
+					map[string]any{"uid": "qh-1", "datasourceUid": "loki-uid"},
+					map[string]any{"uid": "qh-2", "datasourceUid": "prom-uid"},
+				},
+				"totalCount": 3,
+			},
+		},
+	}
+	app, out, errOut := newTestApp(store, client)
+
+	if code := app.Run(context.Background(), []string{"--agent", "query-history", "list", "--datasource-uid", "loki-uid,prom-uid", "--search", "checkout", "--starred", "--sort", "time-asc", "--page", "2", "--limit", "2", "--from", "30m", "--to", "now"}); code != 0 {
+		t.Fatalf("query-history list should succeed: %s", errOut.String())
+	}
+	if client.rawMethod != "GET" || !strings.HasPrefix(client.rawPath, "/api/query-history?") {
+		t.Fatalf("unexpected query-history request: method=%s path=%s", client.rawMethod, client.rawPath)
+	}
+	for _, fragment := range []string{
+		"datasourceUid=loki-uid",
+		"datasourceUid=prom-uid",
+		"searchString=checkout",
+		"onlyStarred=true",
+		"sort=time-asc",
+		"page=2",
+		"limit=2",
+		"from=" + normalizeQueryHistoryBound(app.Now(), "30m"),
+		"to=" + normalizeQueryHistoryBound(app.Now(), "now"),
+	} {
+		if !strings.Contains(client.rawPath, fragment) {
+			t.Fatalf("expected %q in query-history path %q", fragment, client.rawPath)
+		}
+	}
+	queryEnvelope := decodeJSON(t, out.String())
+	queryMeta := queryEnvelope["metadata"].(map[string]any)
+	if queryMeta["count"] != float64(2) || queryMeta["truncated"] != true {
+		t.Fatalf("expected query-history metadata, got %+v", queryMeta)
+	}
+	if queryMeta["next_action"] == "" {
+		t.Fatalf("expected query-history next action, got %+v", queryMeta)
+	}
+
+	out.Reset()
+	client.rawResult = []any{
+		map[string]any{"name": "Checkout Availability", "description": "Success budget"},
+		map[string]any{"name": "Payments Availability", "description": "Payments budget"},
+		map[string]any{"name": "Checkout Latency", "description": "Latency objective"},
+	}
+	if code := app.Run(context.Background(), []string{"--agent", "slo", "list", "--query", "checkout", "--limit", "1"}); code != 0 {
+		t.Fatalf("slo list should succeed: %s", errOut.String())
+	}
+	if client.rawPath != "/api/plugins/grafana-slo-app/resources/v1/slo" {
+		t.Fatalf("unexpected slo path: %s", client.rawPath)
+	}
+	sloEnvelope := decodeJSON(t, out.String())
+	sloMeta := sloEnvelope["metadata"].(map[string]any)
+	if sloMeta["count"] != float64(2) || sloMeta["truncated"] != true {
+		t.Fatalf("expected slo metadata, got %+v", sloMeta)
+	}
+	data := sloEnvelope["data"].([]any)
+	if len(data) != 1 || data[0].(map[string]any)["name"] != "Checkout Availability" {
+		t.Fatalf("expected filtered slo data, got %+v", data)
+	}
+
+	if code := app.Run(context.Background(), []string{"query-history", "bad"}); code != 1 {
+		t.Fatalf("query-history bad subcommand should fail")
+	}
+	if code := app.Run(context.Background(), []string{"query-history", "list", "--sort", "bad"}); code != 1 {
+		t.Fatalf("query-history invalid sort should fail")
+	}
+	if code := app.Run(context.Background(), []string{"query-history", "list", "--limit", "0"}); code != 1 {
+		t.Fatalf("query-history invalid limit should fail")
+	}
+	if code := app.Run(context.Background(), []string{"query-history", "list", "--page", "0"}); code != 1 {
+		t.Fatalf("query-history invalid page should fail")
+	}
+	if code := app.Run(context.Background(), []string{"query-history", "list", "--bad"}); code != 1 {
+		t.Fatalf("query-history parse failure should fail")
+	}
+	if code := app.Run(context.Background(), []string{"slo", "bad"}); code != 1 {
+		t.Fatalf("slo bad subcommand should fail")
+	}
+	if code := app.Run(context.Background(), []string{"slo", "list", "--limit", "0"}); code != 1 {
+		t.Fatalf("slo invalid limit should fail")
+	}
+	if code := app.Run(context.Background(), []string{"slo", "list", "--bad"}); code != 1 {
+		t.Fatalf("slo parse failure should fail")
+	}
+}
+
+func TestIRMAndOnCallCommands(t *testing.T) {
+	store := &fakeStore{cfg: config.Config{Token: "token", BaseURL: "https://stack.grafana.net", OnCallURL: "https://oncall.grafana.net"}}
+	client := &fakeClient{
+		rawResponses: map[string]any{
+			"/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.QueryIncidentPreviews": map[string]any{
+				"results": []any{
+					map[string]any{"incident": map[string]any{"title": "Checkout latency", "id": "inc-1"}},
+					map[string]any{"incident": map[string]any{"title": "Payments latency", "id": "inc-2"}},
+				},
+			},
+			"/api/v1/schedules/": map[string]any{
+				"count": 2,
+				"next":  "https://oncall.grafana.net/api/v1/schedules/?page=2",
+				"results": []any{
+					map[string]any{"name": "Primary Checkout", "team": map[string]any{"name": "Checkout"}},
+					map[string]any{"name": "Primary Payments", "team": map[string]any{"name": "Payments"}},
+				},
+			},
+		},
+	}
+	out := &strings.Builder{}
+	errOut := &strings.Builder{}
+	app := NewApp(store)
+	app.Out = out
+	app.Err = errOut
+	app.Now = func() time.Time { return time.Date(2026, 3, 5, 15, 4, 0, 0, time.UTC) }
+	var clientConfigs []config.Config
+	app.NewClient = func(cfg config.Config) APIClient {
+		clientConfigs = append(clientConfigs, cfg)
+		return client
+	}
+
+	if code := app.Run(context.Background(), []string{"--agent", "irm", "incidents", "list", "--query", "checkout", "--limit", "2", "--order-field", "updatedAt", "--order-direction", "asc"}); code != 0 {
+		t.Fatalf("irm incidents list should succeed: %s", errOut.String())
+	}
+	if client.rawMethod != "POST" || client.rawPath != "/api/plugins/grafana-irm-app/resources/api/v1/IncidentsService.QueryIncidentPreviews" {
+		t.Fatalf("unexpected irm request: method=%s path=%s", client.rawMethod, client.rawPath)
+	}
+	body := client.rawBody.(map[string]any)["query"].(map[string]any)
+	if body["limit"] != 2 || body["queryString"] != "checkout" {
+		t.Fatalf("unexpected irm request body: %+v", body)
+	}
+	orderBy := body["orderBy"].(map[string]any)
+	if orderBy["field"] != "updatedAt" || orderBy["direction"] != "asc" {
+		t.Fatalf("unexpected irm orderBy: %+v", orderBy)
+	}
+	irmEnvelope := decodeJSON(t, out.String())
+	irmMeta := irmEnvelope["metadata"].(map[string]any)
+	if irmMeta["command"] != "irm incidents list" || irmMeta["count"] != float64(2) {
+		t.Fatalf("unexpected irm metadata: %+v", irmMeta)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := app.Run(context.Background(), []string{"--agent", "oncall", "schedules", "list", "--query", "checkout", "--limit", "1"}); code != 0 {
+		t.Fatalf("oncall schedules list should succeed: %s", errOut.String())
+	}
+	if client.rawMethod != "GET" || client.rawPath != "/api/v1/schedules/" {
+		t.Fatalf("unexpected oncall request: method=%s path=%s", client.rawMethod, client.rawPath)
+	}
+	if len(clientConfigs) < 2 || clientConfigs[len(clientConfigs)-1].BaseURL != "https://oncall.grafana.net" {
+		t.Fatalf("expected oncall client to use oncall base URL, got %+v", clientConfigs)
+	}
+	oncallEnvelope := decodeJSON(t, out.String())
+	oncallMeta := oncallEnvelope["metadata"].(map[string]any)
+	if oncallMeta["command"] != "oncall schedules list" || oncallMeta["count"] != float64(1) || oncallMeta["truncated"] != true {
+		t.Fatalf("unexpected oncall metadata: %+v", oncallMeta)
+	}
+	oncallData := oncallEnvelope["data"].(map[string]any)["results"].([]any)
+	if len(oncallData) != 1 || oncallData[0].(map[string]any)["name"] != "Primary Checkout" {
+		t.Fatalf("unexpected oncall payload: %+v", oncallData)
+	}
+
+	for _, args := range [][]string{
+		{"irm", "bad"},
+		{"irm", "incidents", "list", "--limit", "0"},
+		{"irm", "incidents", "list", "--order-direction", "sideways"},
+		{"irm", "incidents", "list", "--bad"},
+		{"oncall", "bad"},
+		{"oncall", "schedules", "list", "--limit", "0"},
+		{"oncall", "schedules", "list", "--bad"},
+	} {
+		if code := app.Run(context.Background(), args); code != 1 {
+			t.Fatalf("expected failure for %v", args)
 		}
 	}
 }
@@ -979,8 +1852,12 @@ func TestAssistantCommands(t *testing.T) {
 		t.Fatalf("unexpected assistant skills response")
 	}
 
-	if code := app.Run(context.Background(), []string{"assistant"}); code != 1 {
-		t.Fatalf("assistant usage should fail")
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"assistant"}); code != 0 {
+		t.Fatalf("assistant help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected assistant discovery output")
 	}
 	if code := app.Run(context.Background(), []string{"assistant", "chat"}); code != 1 {
 		t.Fatalf("assistant chat missing prompt should fail")
@@ -1006,8 +1883,26 @@ func TestRuntimeAggregateIncidentAgent(t *testing.T) {
 	store := &fakeStore{cfg: config.Config{Token: "token"}}
 	client := &fakeClient{
 		metricsResult: map[string]any{"m": 1},
-		logsResult:    map[string]any{"l": 1},
-		tracesResult:  map[string]any{"t": 1},
+		logsResult: map[string]any{
+			"data": map[string]any{
+				"result": []any{
+					map[string]any{
+						"stream": map[string]any{"app": "checkout", "level": "error"},
+						"values": []any{[]any{"1", "error"}, []any{"2", "timeout"}},
+					},
+					map[string]any{
+						"stream": map[string]any{"app": "payments"},
+						"values": []any{[]any{"3", "error"}},
+					},
+				},
+			},
+		},
+		tracesResult: map[string]any{
+			"traces": []any{
+				map[string]any{"traceID": "t-1", "rootServiceName": "checkout", "rootTraceName": "GET /checkout"},
+				map[string]any{"traceID": "t-2", "rootServiceName": "payments", "rootTraceName": "POST /charge"},
+			},
+		},
 		aggregateResult: grafana.AggregateSnapshot{
 			Metrics: map[string]any{"data": map[string]any{"result": []any{1, 2}}},
 			Logs:    map[string]any{"data": map[string]any{"result": []any{1}}},
@@ -1020,11 +1915,27 @@ func TestRuntimeAggregateIncidentAgent(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"runtime", "metrics", "query", "--expr", "up"}); code != 0 {
 		t.Fatalf("runtime metrics failed: %s", errOut.String())
 	}
-	if code := app.Run(context.Background(), []string{"runtime"}); code != 1 {
-		t.Fatalf("runtime usage should fail")
+	if client.metricsExpr != "up" || client.metricsStep != "30s" {
+		t.Fatalf("unexpected metrics request capture: %+v", client)
+	}
+	if _, err := time.Parse(time.RFC3339, client.metricsStart); err != nil {
+		t.Fatalf("expected normalized runtime metrics start, got %q", client.metricsStart)
+	}
+	if _, err := time.Parse(time.RFC3339, client.metricsEnd); err != nil {
+		t.Fatalf("expected normalized runtime metrics end, got %q", client.metricsEnd)
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"runtime"}); code != 0 {
+		t.Fatalf("runtime help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected runtime discovery output")
 	}
 	if code := app.Run(context.Background(), []string{"runtime", "metrics", "bad"}); code != 1 {
 		t.Fatalf("runtime metrics bad verb should fail")
+	}
+	if code := app.Run(context.Background(), []string{"runtime", "metrics"}); code != 1 {
+		t.Fatalf("runtime metrics missing verb should fail")
 	}
 	if code := app.Run(context.Background(), []string{"runtime", "logs", "bad"}); code != 1 {
 		t.Fatalf("runtime logs bad verb should fail")
@@ -1044,11 +1955,51 @@ func TestRuntimeAggregateIncidentAgent(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"runtime", "logs", "query", "--query", "{}"}); code != 0 {
 		t.Fatalf("runtime logs failed")
 	}
+	if client.logsQuery != "{}" || client.logsLimit != 200 {
+		t.Fatalf("unexpected logs request capture: %+v", client)
+	}
+	if _, err := time.Parse(time.RFC3339, client.logsStart); err != nil {
+		t.Fatalf("expected normalized runtime logs start, got %q", client.logsStart)
+	}
+	if _, err := time.Parse(time.RFC3339, client.logsEnd); err != nil {
+		t.Fatalf("expected normalized runtime logs end, got %q", client.logsEnd)
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"runtime", "logs", "aggregate", "--query", "{}"}); code != 0 {
+		t.Fatalf("runtime logs aggregate failed")
+	}
+	logSummary := decodeJSON(t, out.String())
+	if logSummary["streams"].(float64) != 2 || logSummary["entries"].(float64) != 3 {
+		t.Fatalf("unexpected logs aggregate summary: %+v", logSummary)
+	}
 	if code := app.Run(context.Background(), []string{"runtime", "traces", "search", "--query", "{}"}); code != 0 {
 		t.Fatalf("runtime traces failed")
 	}
+	if client.tracesQuery != "{}" || client.tracesLimit != 200 {
+		t.Fatalf("unexpected traces request capture: %+v", client)
+	}
+	if _, err := time.Parse(time.RFC3339, client.tracesStart); err != nil {
+		t.Fatalf("expected normalized runtime traces start, got %q", client.tracesStart)
+	}
+	if _, err := time.Parse(time.RFC3339, client.tracesEnd); err != nil {
+		t.Fatalf("expected normalized runtime traces end, got %q", client.tracesEnd)
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"runtime", "traces", "aggregate", "--query", "{}"}); code != 0 {
+		t.Fatalf("runtime traces aggregate failed")
+	}
+	traceSummary := decodeJSON(t, out.String())
+	if traceSummary["trace_matches"].(float64) != 2 {
+		t.Fatalf("unexpected traces aggregate summary: %+v", traceSummary)
+	}
 	if code := app.Run(context.Background(), []string{"runtime", "metrics", "query"}); code != 1 {
 		t.Fatalf("missing expr should fail")
+	}
+	if code := app.Run(context.Background(), []string{"runtime", "logs", "aggregate"}); code != 1 {
+		t.Fatalf("logs aggregate should require --query")
+	}
+	if code := app.Run(context.Background(), []string{"runtime", "traces", "aggregate"}); code != 1 {
+		t.Fatalf("traces aggregate should require --query")
 	}
 	if code := app.Run(context.Background(), []string{"runtime", "bad", "query"}); code != 1 {
 		t.Fatalf("bad runtime command should fail")
@@ -1063,8 +2014,15 @@ func TestRuntimeAggregateIncidentAgent(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"aggregate", "snapshot"}); code != 1 {
 		t.Fatalf("aggregate missing flags should fail")
 	}
-	if code := app.Run(context.Background(), []string{"aggregate"}); code != 1 {
-		t.Fatalf("aggregate usage should fail")
+	if code := app.Run(context.Background(), []string{"aggregate", "bad"}); code != 1 {
+		t.Fatalf("aggregate bad subcommand should fail")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"aggregate"}); code != 0 {
+		t.Fatalf("aggregate help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected aggregate discovery output")
 	}
 	if code := app.Run(context.Background(), []string{"aggregate", "snapshot", "--bad"}); code != 1 {
 		t.Fatalf("aggregate parse should fail")
@@ -1132,6 +2090,67 @@ func TestRequireAuthAndClientErrors(t *testing.T) {
 		t.Fatalf("unexpected auth error: %s", errOut.String())
 	}
 
+	store = &fakeStore{cfg: config.Config{}}
+	client = &fakeClient{}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"query-history", "list"}); code != 1 {
+		t.Fatalf("expected query-history auth error")
+	}
+	store = &fakeStore{cfg: config.Config{Token: "x"}}
+	client = &fakeClient{rawErr: errors.New("query-history fail")}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"query-history", "list"}); code != 1 {
+		t.Fatalf("expected query-history client error")
+	}
+
+	store = &fakeStore{cfg: config.Config{}}
+	client = &fakeClient{}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"slo", "list"}); code != 1 {
+		t.Fatalf("expected slo auth error")
+	}
+	store = &fakeStore{cfg: config.Config{Token: "x"}}
+	client = &fakeClient{rawErr: errors.New("slo fail")}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"slo", "list"}); code != 1 {
+		t.Fatalf("expected slo client error")
+	}
+
+	store = &fakeStore{cfg: config.Config{}}
+	client = &fakeClient{}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"irm", "incidents", "list"}); code != 1 {
+		t.Fatalf("expected irm auth error")
+	}
+	store = &fakeStore{cfg: config.Config{Token: "x"}}
+	client = &fakeClient{rawErr: errors.New("irm fail")}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"irm", "incidents", "list"}); code != 1 {
+		t.Fatalf("expected irm client error")
+	}
+
+	store = &fakeStore{cfg: config.Config{Token: "x"}}
+	client = &fakeClient{}
+	app, _, errOut = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"oncall", "schedules", "list"}); code != 1 {
+		t.Fatalf("expected oncall config error")
+	}
+	if !strings.Contains(errOut.String(), "oncall URL is not configured") {
+		t.Fatalf("unexpected oncall config error: %s", errOut.String())
+	}
+	store = &fakeStore{cfg: config.Config{Token: "x", OnCallURL: "https://oncall"}}
+	client = &fakeClient{rawErr: errors.New("oncall fail")}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"oncall", "schedules", "list"}); code != 1 {
+		t.Fatalf("expected oncall client error")
+	}
+	store = &fakeStore{cfg: config.Config{}}
+	client = &fakeClient{}
+	app, _, _ = newTestApp(store, client)
+	if _, err := app.requireOnCallConfig(); err == nil {
+		t.Fatalf("expected requireOnCallConfig auth failure")
+	}
+
 	store = &fakeStore{cfg: config.Config{Token: "x"}}
 	client = &fakeClient{cloudErr: errors.New("cloud fail")}
 	app, _, errOut = newTestApp(store, client)
@@ -1159,7 +2178,7 @@ func TestRequireAuthAndClientErrors(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"dashboards", "get", "--uid", "ops"}); code != 1 {
 		t.Fatalf("expected dashboard get client failure")
 	}
-	if code := app.Run(context.Background(), []string{"dashboards", "delete", "--uid", "ops"}); code != 1 {
+	if code := app.Run(context.Background(), []string{"--yes", "dashboards", "delete", "--uid", "ops"}); code != 1 {
 		t.Fatalf("expected dashboard delete client failure")
 	}
 	if code := app.Run(context.Background(), []string{"dashboards", "versions", "--uid", "ops"}); code != 1 {
@@ -1264,8 +2283,8 @@ func TestAdditionalCommandBranches(t *testing.T) {
 	}
 
 	// agent with no subcommand.
-	if code := app.Run(context.Background(), []string{"agent"}); code != 1 {
-		t.Fatalf("agent usage should fail")
+	if code := app.Run(context.Background(), []string{"agent"}); code != 0 {
+		t.Fatalf("agent help should succeed")
 	}
 }
 
@@ -1463,8 +2482,14 @@ func TestHelpers(t *testing.T) {
 	if inferCollectionCount(map[string]any{"items": []any{1}}) != 1 {
 		t.Fatalf("unexpected map collection count")
 	}
+	if inferCollectionCount(map[string]any{"result": map[string]any{"queryHistory": []any{1}}}) != 1 {
+		t.Fatalf("unexpected nested collection count")
+	}
 	if inferCollectionCount("x") != 0 {
 		t.Fatalf("unexpected fallback count")
+	}
+	if inferCollectionCount(map[string]any{"ignored": []any{1}}) != 0 {
+		t.Fatalf("unexpected collection count for ignored key")
 	}
 
 	if countPath(map[string]any{"a": map[string]any{"b": []any{1, 2}}}, "a", "b") != 2 {
@@ -1506,6 +2531,217 @@ func TestHelpers(t *testing.T) {
 	if parseInt("10", 5) != 10 || parseInt("bad", 5) != 5 {
 		t.Fatalf("unexpected parseInt result")
 	}
+	if minInt(3, 2) != 2 || minInt(1, 2) != 1 {
+		t.Fatalf("unexpected min results")
+	}
+	if appendQuery("/api/test", nil) != "/api/test" {
+		t.Fatalf("expected empty query append to preserve path")
+	}
+	if got := appendQuery("/api/test", url.Values{"q": []string{"x"}}); got != "/api/test?q=x" {
+		t.Fatalf("unexpected query append: %s", got)
+	}
+	if got := normalizeQueryHistoryBound(time.Date(2026, 3, 5, 15, 4, 0, 0, time.UTC), "30m"); got != "1772721240000" {
+		t.Fatalf("unexpected query-history bound normalization: %s", got)
+	}
+	if got := normalizeQueryHistoryBound(time.Date(2026, 3, 5, 15, 4, 0, 0, time.UTC), "1700000000"); got != "1700000000" {
+		t.Fatalf("expected unix passthrough, got %s", got)
+	}
+	if meta := queryHistoryMetadata(map[string]any{"result": map[string]any{"queryHistory": []any{1, 2}, "totalCount": 4}}, 2); meta.Count == nil || *meta.Count != 2 || !meta.Truncated {
+		t.Fatalf("unexpected query-history metadata: %+v", meta)
+	}
+	if meta := queryHistoryMetadata(map[string]any{"result": map[string]any{}}, 1); len(meta.Warnings) != 1 {
+		t.Fatalf("expected query-history warnings, got %+v", meta)
+	}
+	filteredPayload, count, truncated := filterNamedPayload([]any{
+		map[string]any{"name": "Checkout Availability", "description": "Success"},
+		map[string]any{"name": "Payments Availability", "description": "Payments"},
+		map[string]any{"name": "Checkout Latency", "description": "Latency"},
+	}, "checkout", 1, "name", "description")
+	filteredItems := filteredPayload.([]any)
+	if count != 2 || !truncated || len(filteredItems) != 1 {
+		t.Fatalf("unexpected filtered payload result: count=%d truncated=%v payload=%+v", count, truncated, filteredPayload)
+	}
+	payloadMap, count, truncated := filterNamedPayload(map[string]any{"slos": []any{
+		map[string]any{"name": "Checkout", "description": "Budget"},
+	}}, "", 10, "name")
+	if count != 1 || truncated || payloadMap.(map[string]any)["slos"] == nil {
+		t.Fatalf("unexpected wrapped filtered payload: count=%d truncated=%v payload=%+v", count, truncated, payloadMap)
+	}
+	resultsPayload, count, truncated := filterNamedPayload(map[string]any{"results": []any{
+		map[string]any{"name": "Checkout"},
+		map[string]any{"name": "Payments"},
+	}}, "checkout", 10, "name")
+	if count != 1 || truncated || len(resultsPayload.(map[string]any)["results"].([]any)) != 1 {
+		t.Fatalf("unexpected results wrapped filtered payload: count=%d truncated=%v payload=%+v", count, truncated, resultsPayload)
+	}
+	if _, _, ok := collectionPayload("scalar"); ok {
+		t.Fatalf("unexpected collection payload for scalar")
+	}
+	if passthroughPayload, passthroughCount, passthroughTruncated := filterNamedPayload(map[string]any{"other": "value"}, "checkout", 5, "name"); passthroughCount != 0 || passthroughTruncated || passthroughPayload.(map[string]any)["other"] != "value" {
+		t.Fatalf("unexpected passthrough filtered payload: count=%d truncated=%v payload=%+v", passthroughCount, passthroughTruncated, passthroughPayload)
+	}
+	if filteredPayload, count, truncated := filterNamedPayload([]any{"bad", map[string]any{"name": "Checkout"}}, "checkout", 10, "name"); count != 1 || truncated || len(filteredPayload.([]any)) != 1 {
+		t.Fatalf("unexpected mixed filtered payload: count=%d truncated=%v payload=%+v", count, truncated, filteredPayload)
+	}
+	if !matchesAnyField(map[string]any{"name": "Checkout"}, "check", "name") {
+		t.Fatalf("expected matchesAnyField to match")
+	}
+	if !matchesAnyField(map[string]any{"name": "Checkout"}, "", "name") {
+		t.Fatalf("expected empty query to match")
+	}
+	if matchesAnyField(map[string]any{"name": "Checkout"}, "payments", "name") {
+		t.Fatalf("expected matchesAnyField to miss")
+	}
+	if got := collectionAtPath(map[string]any{"data": map[string]any{"result": []any{1, 2}}}, "data", "result"); len(got) != 2 {
+		t.Fatalf("unexpected collectionAtPath result: %+v", got)
+	}
+	if got := collectionAtPath("scalar", "data"); got != nil {
+		t.Fatalf("expected nil collectionAtPath for scalar")
+	}
+	if got, ok := intPath(map[string]any{"result": map[string]any{"totalCount": float64(4)}}, "result", "totalCount"); !ok || got != 4 {
+		t.Fatalf("unexpected intPath result: got=%d ok=%v", got, ok)
+	}
+	if _, ok := intPath("scalar", "x"); ok {
+		t.Fatalf("unexpected intPath success for scalar")
+	}
+	if got, ok := intValue(json.Number("4")); !ok || got != 4 {
+		t.Fatalf("unexpected intValue result: got=%d ok=%v", got, ok)
+	}
+	if got, ok := intValue(int64(6)); !ok || got != 6 {
+		t.Fatalf("unexpected intValue int64 result: got=%d ok=%v", got, ok)
+	}
+	if _, ok := intValue(json.Number("bad")); ok {
+		t.Fatalf("unexpected intValue success for invalid json number")
+	}
+	if _, ok := intValue("bad"); ok {
+		t.Fatalf("unexpected intValue success for string")
+	}
+	if got := firstNonEmptyString(map[string]any{"a": "", "b": "checkout"}, "a", "b"); got != "checkout" {
+		t.Fatalf("unexpected firstNonEmptyString result: %s", got)
+	}
+	if got := firstNonEmptyString(map[string]any{"a": ""}, "missing", "a"); got != "" {
+		t.Fatalf("expected empty firstNonEmptyString result, got %q", got)
+	}
+	if got := sortedSet(map[string]struct{}{"b": {}, "a": {}}); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("unexpected sortedSet result: %+v", got)
+	}
+	logSummary := summarizeLogsResult(map[string]any{"data": map[string]any{"result": []any{
+		"bad",
+		map[string]any{"stream": map[string]any{"app": "checkout"}, "values": []any{1, 2}},
+	}}})
+	if logSummary["streams"].(int) != 1 || logSummary["entries"].(int) != 2 {
+		t.Fatalf("unexpected log summary: %+v", logSummary)
+	}
+	traceSummary := summarizeTracesResult(map[string]any{"data": map[string]any{"traces": []any{
+		"bad",
+		map[string]any{"traceID": "t-1", "rootServiceName": "checkout", "rootTraceName": "GET /checkout"},
+	}}})
+	if traceSummary["trace_matches"].(int) != 1 || traceSummary["services"].([]string)[0] != "checkout" {
+		t.Fatalf("unexpected trace summary: %+v", traceSummary)
+	}
+	if meta := runtimeAggregateMetadata("runtime logs aggregate", 2); meta.Command != "runtime logs aggregate" || meta.Count == nil || *meta.Count != 2 {
+		t.Fatalf("unexpected runtime aggregate metadata: %+v", meta)
+	}
+	if !payloadHasNextPage(map[string]any{"next": "https://next"}) {
+		t.Fatalf("expected payloadHasNextPage to detect next page")
+	}
+	if payloadHasNextPage([]any{1}) {
+		t.Fatalf("expected payloadHasNextPage to ignore non-map payloads")
+	}
+}
+
+func TestAuthInferenceHelpers(t *testing.T) {
+	slug, baseURL, err := normalizeStackIdentifier("https://prod-observability.grafana.net")
+	if err != nil || slug != "prod-observability" || baseURL != "https://prod-observability.grafana.net" {
+		t.Fatalf("unexpected stack identifier parse from url: slug=%s base=%s err=%v", slug, baseURL, err)
+	}
+	slug, baseURL, err = normalizeStackIdentifier("prod-observability.grafana.net")
+	if err != nil || slug != "prod-observability" || baseURL != "https://prod-observability.grafana.net" {
+		t.Fatalf("unexpected stack identifier parse from host: slug=%s base=%s err=%v", slug, baseURL, err)
+	}
+	slug, baseURL, err = normalizeStackIdentifier("prod-observability")
+	if err != nil || slug != "prod-observability" || baseURL != "https://prod-observability.grafana.net" {
+		t.Fatalf("unexpected stack identifier parse from slug: slug=%s base=%s err=%v", slug, baseURL, err)
+	}
+	if _, _, err := normalizeStackIdentifier("https://example.com"); err == nil {
+		t.Fatalf("expected invalid stack host error")
+	}
+	if _, _, err := normalizeStackIdentifier("example.com"); err == nil {
+		t.Fatalf("expected invalid stack host without scheme error")
+	}
+	if _, _, err := normalizeStackIdentifier("https://%"); err == nil {
+		t.Fatalf("expected invalid stack url parse error")
+	}
+	if _, _, err := normalizeStackIdentifier(""); err == nil {
+		t.Fatalf("expected empty stack error")
+	}
+
+	endpoints := inferDatasourceEndpoints([]any{
+		map[string]any{"type": "prometheus", "url": "https://prom"},
+		map[string]any{"type": "loki", "url": "https://logs"},
+		map[string]any{"type": "tempo", "url": "https://traces"},
+	})
+	if endpoints.PrometheusURL != "https://prom" || endpoints.LogsURL != "https://logs" || endpoints.TracesURL != "https://traces" {
+		t.Fatalf("unexpected datasource endpoint inference: %+v", endpoints)
+	}
+	if endpoints := inferDatasourceEndpoints([]any{"bad", map[string]any{"type": "prometheus"}}); endpoints.PrometheusURL != "" {
+		t.Fatalf("expected datasource inference to ignore invalid entries, got %+v", endpoints)
+	}
+	if endpoints := inferDatasourceEndpoints("scalar"); endpoints.PrometheusURL != "" || endpoints.LogsURL != "" || endpoints.TracesURL != "" {
+		t.Fatalf("expected empty datasource inference for scalar payload, got %+v", endpoints)
+	}
+	if oncallURL := inferOnCallURL(map[string]any{"connections": []any{
+		map[string]any{"type": "oncall", "details": map[string]any{"oncallApiUrl": "https://oncall"}},
+	}}); oncallURL != "https://oncall" {
+		t.Fatalf("unexpected oncall url inference: %s", oncallURL)
+	}
+	if oncallURL := inferOnCallURL(map[string]any{"oncallApiUrl": "https://root-oncall"}); oncallURL != "https://root-oncall" {
+		t.Fatalf("unexpected top-level oncall url inference: %s", oncallURL)
+	}
+	if oncallURL := inferOnCallURL(map[string]any{"results": []any{
+		"bad",
+		map[string]any{"type": "oncall", "details": map[string]any{"oncallApiUrl": "https://record-oncall"}},
+	}}); oncallURL != "https://record-oncall" {
+		t.Fatalf("unexpected oncall url inference from record scan: %s", oncallURL)
+	}
+	if oncallURL := inferOnCallURL(map[string]any{"connections": []any{
+		map[string]any{"type": "oncall", "url": "https://fallback-oncall"},
+	}}); oncallURL != "https://fallback-oncall" {
+		t.Fatalf("unexpected oncall fallback url inference: %s", oncallURL)
+	}
+	if oncallURL := inferOnCallURL(map[string]any{"results": []any{
+		map[string]any{"type": "pagerduty", "url": "https://pagerduty"},
+	}}); oncallURL != "" {
+		t.Fatalf("expected empty oncall inference for unrelated payload, got %s", oncallURL)
+	}
+	if oncallURL := inferOnCallURL("scalar"); oncallURL != "" {
+		t.Fatalf("expected empty oncall inference for scalar payload, got %s", oncallURL)
+	}
+	if value := recursiveStringValue(map[string]any{"a": []any{map[string]any{"oncallApiUrl": "https://oncall"}}}, "oncallApiUrl"); value != "https://oncall" {
+		t.Fatalf("unexpected recursive string value: %s", value)
+	}
+	if !containsAny("grafana-oncall", "oncall", "schedules") {
+		t.Fatalf("expected containsAny match")
+	}
+	if containsAny("grafana-runtime", "oncall", "schedules") {
+		t.Fatalf("expected containsAny to miss")
+	}
+
+	app := NewApp(&fakeStore{})
+	fake := &fakeClient{
+		rawResponses: map[string]any{
+			"/api/instances/prod-observability/datasources": []any{map[string]any{"type": "prometheus", "url": "https://prom"}},
+		},
+		rawErrors: map[string]error{
+			"/api/instances/prod-observability/connections": errors.New("connections failed"),
+		},
+	}
+	app.NewClient = func(config.Config) APIClient { return fake }
+	cfg := &config.Config{CloudURL: "https://grafana.com", Token: "token"}
+	warnings := app.applyInferredStackEndpoints(context.Background(), cfg, "prod-observability", "")
+	if len(warnings) != 1 || cfg.PrometheusURL != "https://prom" {
+		t.Fatalf("unexpected inferred stack endpoint warnings or config: warnings=%+v cfg=%+v", warnings, cfg)
+	}
 }
 
 func TestContextAndConfigCommands(t *testing.T) {
@@ -1519,6 +2755,7 @@ func TestContextAndConfigCommands(t *testing.T) {
 				PrometheusURL: "https://prom-default.grafana.net",
 				LogsURL:       "https://logs-default.grafana.net",
 				TracesURL:     "https://traces-default.grafana.net",
+				OnCallURL:     "https://oncall-default.grafana.net",
 				OrgID:         1,
 			},
 			"prod": {
@@ -1528,6 +2765,7 @@ func TestContextAndConfigCommands(t *testing.T) {
 				PrometheusURL: "https://prom-prod.grafana.net",
 				LogsURL:       "https://logs-prod.grafana.net",
 				TracesURL:     "https://traces-prod.grafana.net",
+				OnCallURL:     "https://oncall-prod.grafana.net",
 				OrgID:         2,
 			},
 		},
@@ -1659,7 +2897,7 @@ func TestContextAndConfigCommands(t *testing.T) {
 		t.Fatalf("auth status should succeed: %s", errOut.String())
 	}
 	status := decodeJSON(t, out.String())
-	if status["context"] != "ops" || status["status"] != "authenticated" {
+	if status["context"] != "ops" || status["status"] != "authenticated" || status["capabilities"] == nil {
 		t.Fatalf("unexpected auth status: %+v", status)
 	}
 }
@@ -1903,6 +3141,7 @@ func TestOutputFormattingAndContextHelpers(t *testing.T) {
 				PrometheusURL: "https://prom.grafana.net",
 				LogsURL:       "https://logs.grafana.net",
 				TracesURL:     "https://traces.grafana.net",
+				OnCallURL:     "https://oncall.grafana.net",
 				TokenBackend:  "keyring",
 				OrgID:         7,
 			},
@@ -1970,7 +3209,7 @@ func TestOutputFormattingAndContextHelpers(t *testing.T) {
 	}
 
 	payload := configPayload("default", store.cfgs["default"])
-	if payload["token_backend"] != "keyring" {
+	if payload["token_backend"] != "keyring" || payload["oncall_url"] != "https://oncall.grafana.net" {
 		t.Fatalf("unexpected config payload: %+v", payload)
 	}
 
@@ -1984,6 +3223,7 @@ func TestOutputFormattingAndContextHelpers(t *testing.T) {
 		PrometheusURL: "prom",
 		LogsURL:       "logs",
 		TracesURL:     "traces",
+		OnCallURL:     "oncall",
 		TokenBackend:  "keyring",
 		OrgID:         5,
 	}
@@ -1995,6 +3235,7 @@ func TestOutputFormattingAndContextHelpers(t *testing.T) {
 		"prometheus_url": "prom",
 		"logs-url":       "logs",
 		"traces_url":     "traces",
+		"oncall-url":     "oncall",
 		"org-id":         int64(5),
 		"token-backend":  "keyring",
 	} {
@@ -2018,6 +3259,7 @@ func TestOutputFormattingAndContextHelpers(t *testing.T) {
 		{key: "prom-url", value: "prom", check: func(cfg config.Config) bool { return cfg.PrometheusURL == "prom" }},
 		{key: "logs-url", value: "logs", check: func(cfg config.Config) bool { return cfg.LogsURL == "logs" }},
 		{key: "traces-url", value: "traces", check: func(cfg config.Config) bool { return cfg.TracesURL == "traces" }},
+		{key: "oncall-url", value: "oncall", check: func(cfg config.Config) bool { return cfg.OnCallURL == "oncall" }},
 		{key: "org-id", value: "11", check: func(cfg config.Config) bool { return cfg.OrgID == 11 }},
 	}
 	for _, update := range updates {

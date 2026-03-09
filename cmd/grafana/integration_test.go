@@ -198,7 +198,7 @@ func (h *integrationHarness) params(group string) testscript.Params {
 		RequireUniqueNames:  true,
 		Setup: func(env *testscript.Env) error {
 			configHome := filepath.Join(env.Cd, ".config")
-			runID := strings.ToLower(strconv.FormatInt(time.Now().UnixNano(), 36))
+			runID := integrationRunID()
 			env.Setenv("HOME", env.Cd)
 			env.Setenv("XDG_CONFIG_HOME", configHome)
 			env.Setenv("GRAFANA_CLI_DISABLE_KEYRING", "1")
@@ -220,6 +220,14 @@ func (h *integrationHarness) params(group string) testscript.Params {
 			return nil
 		},
 	}
+}
+
+func integrationRunID() string {
+	runID := strings.ToLower(strconv.FormatInt(time.Now().UnixNano(), 36))
+	if len(runID) > 8 {
+		runID = runID[len(runID)-8:]
+	}
+	return runID
 }
 
 func newGrafanaProxy(upstream string) (*httptest.Server, error) {

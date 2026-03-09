@@ -17,6 +17,8 @@ CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-grafana-integration}"
 RENDERER_URL="${RENDERER_URL:-http://127.0.0.1:8081}"
 GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-admin}"
 GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-admin}"
+GRAFANA_HEALTH_ATTEMPTS="${GRAFANA_HEALTH_ATTEMPTS:-120}"
+GRAFANA_HEALTH_DELAY="${GRAFANA_HEALTH_DELAY:-2}"
 SERVICE_ACCOUNT_NAME="${SERVICE_ACCOUNT_NAME:-grafana-cli-integration}"
 TOKEN_NAME="${TOKEN_NAME:-grafana-cli-integration-token}"
 SYNTHETICS_TOKEN="${SYNTHETICS_TOKEN:-synthetics-integration-token}"
@@ -130,7 +132,9 @@ unix_time_us() {
   perl -MTime::HiRes=time -e 'printf "%.0f\n", time() * 1000000'
 }
 
-wait_for_http "${GRAFANA_URL}/api/health"
+# Grafana can take longer to become healthy on fresh GitHub runners because it
+# installs plugins during startup.
+wait_for_http "${GRAFANA_URL}/api/health" "${GRAFANA_HEALTH_ATTEMPTS}" "${GRAFANA_HEALTH_DELAY}"
 wait_for_http "${PROM_URL}/-/ready"
 wait_for_http "${LOKI_URL}/ready"
 wait_for_http "${TEMPO_URL}/ready"

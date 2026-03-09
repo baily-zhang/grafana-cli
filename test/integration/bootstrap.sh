@@ -15,7 +15,7 @@ RENDERER_URL="${RENDERER_URL:-http://127.0.0.1:8081}"
 GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-admin}"
 GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-admin}"
 SERVICE_ACCOUNT_NAME="${SERVICE_ACCOUNT_NAME:-grafana-cli-integration}"
-TOKEN_NAME="${TOKEN_NAME:-grafana-cli-integration-token-$(date +%s)}"
+TOKEN_NAME="${TOKEN_NAME:-grafana-cli-integration-token}"
 SYNTHETICS_TOKEN="${SYNTHETICS_TOKEN:-synthetics-integration-token}"
 
 require_cmd() {
@@ -105,6 +105,15 @@ if [[ -z "$service_account_id" ]]; then
   service_account_id="$(grafana_api POST "/api/serviceaccounts" "$(jq -nc --arg name "$SERVICE_ACCOUNT_NAME" '{name: $name, role: "Admin"}')" \
     | jq -r '.id')"
 fi
+
+existing_token_ids="$(grafana_api GET "/api/serviceaccounts/${service_account_id}/tokens" \
+  | jq -r --arg name "$TOKEN_NAME" '.[]? | select(.name == $name) | .id')"
+
+while IFS= read -r token_id; do
+  if [[ -n "$token_id" ]]; then
+    grafana_api DELETE "/api/serviceaccounts/${service_account_id}/tokens/${token_id}" >/dev/null
+  fi
+done <<< "$existing_token_ids"
 
 token_value="$(grafana_api POST "/api/serviceaccounts/${service_account_id}/tokens" "$(jq -nc --arg name "$TOKEN_NAME" '{name: $name}')" \
   | jq -r '.key')"

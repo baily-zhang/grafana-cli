@@ -1,6 +1,6 @@
 # Integration Tests
 
-This suite runs the CLI against a local Grafana stack started with Docker Compose.
+This suite runs the CLI against a local Grafana stack started with Docker Compose plus deterministic stub servers for APIs that are not available in the local stack.
 
 ## Stack
 
@@ -71,8 +71,12 @@ The workflow follows the command-coverage groups used by the CLI tests:
 
 Trace ingestion is real, but the Go integration harness serves `/api/search` through a local proxy. The minimal Tempo fixture accepts the spans, but its recent-search API is not stable enough in this setup to rely on directly for deterministic CI.
 
+Cloud, OnCall, and Synthetic Monitoring assertions run against dedicated local stub servers so the commands still exercise their real base-URL separation without depending on external Grafana Cloud services.
+
+Assistant, SLO, and IRM assertions use deterministic plugin-response stubs on top of the local Grafana proxy because the Docker stack does not ship those Grafana apps.
+
 The integration harness forces `GRAFANA_CLI_DISABLE_KEYRING=1` so `auth login` uses file-backed token storage instead of depending on a desktop keyring service in CI or headless local environments.
 
-The shard-to-command mapping lives in [command-coverage.json](/home/marctc/workspace/grafana-cli/test/integration/command-coverage.json). A unit test fails if the discovery schema adds a new leaf command that is not assigned to an integration shard.
+The shard-to-command mapping lives in `test/integration/command-coverage.json`. A unit test fails if the discovery schema adds a new leaf command that is not assigned to an integration shard.
 
-If you do want a repository-local env file for debugging, pass an explicit output path such as `./test/integration/bootstrap.sh test/integration/integration.env`. That file is gitignored.
+If you do want a repository-local env file for debugging, pass an explicit output path such as `./test/integration/bootstrap.sh test/integration/integration.env`. That file is gitignored. The bootstrap script reuses the service account and replaces any existing token with the same `TOKEN_NAME` instead of accumulating stale tokens.

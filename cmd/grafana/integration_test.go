@@ -30,8 +30,11 @@ type integrationHarness struct {
 	serviceAccount  string
 	syntheticsToken string
 	baseProxy       *httptest.Server
+	cloudProxy      *httptest.Server
+	oncallProxy     *httptest.Server
 	promProxy       *httptest.Server
 	tracesProxy     *httptest.Server
+	syntheticsProxy *httptest.Server
 }
 
 var harness *integrationHarness
@@ -128,17 +131,24 @@ func newIntegrationHarness() (*integrationHarness, error) {
 	if err != nil {
 		return nil, err
 	}
+	cloudProxy := newCloudProxy()
+	oncallProxy := newOnCallProxy()
 	promProxy, err := newPrometheusProxy(promURL)
 	if err != nil {
 		baseProxy.Close()
+		cloudProxy.Close()
+		oncallProxy.Close()
 		return nil, err
 	}
 	tracesProxy, err := newTracesProxy(tracesURL)
 	if err != nil {
 		baseProxy.Close()
+		cloudProxy.Close()
+		oncallProxy.Close()
 		promProxy.Close()
 		return nil, err
 	}
+	syntheticsProxy := newSyntheticsProxy()
 
 	return &integrationHarness{
 		baseURL:         baseURL,
@@ -149,8 +159,11 @@ func newIntegrationHarness() (*integrationHarness, error) {
 		serviceAccount:  serviceAccount,
 		syntheticsToken: syntheticsToken,
 		baseProxy:       baseProxy,
+		cloudProxy:      cloudProxy,
+		oncallProxy:     oncallProxy,
 		promProxy:       promProxy,
 		tracesProxy:     tracesProxy,
+		syntheticsProxy: syntheticsProxy,
 	}, nil
 }
 
@@ -161,11 +174,20 @@ func (h *integrationHarness) Close() {
 	if h.baseProxy != nil {
 		h.baseProxy.Close()
 	}
+	if h.cloudProxy != nil {
+		h.cloudProxy.Close()
+	}
+	if h.oncallProxy != nil {
+		h.oncallProxy.Close()
+	}
 	if h.promProxy != nil {
 		h.promProxy.Close()
 	}
 	if h.tracesProxy != nil {
 		h.tracesProxy.Close()
+	}
+	if h.syntheticsProxy != nil {
+		h.syntheticsProxy.Close()
 	}
 }
 
@@ -183,7 +205,7 @@ func (h *integrationHarness) params(group string) testscript.Params {
 			env.Setenv("GRAFANA_ITEST_RUN_ID", runID)
 			env.Setenv("GRAFANA_TOKEN", h.token)
 			env.Setenv("GRAFANA_BASE_URL", h.baseProxy.URL)
-			env.Setenv("GRAFANA_CLOUD_URL", h.baseProxy.URL)
+			env.Setenv("GRAFANA_CLOUD_URL", h.cloudProxy.URL)
 			env.Setenv("GRAFANA_PROM_URL", h.promProxy.URL)
 			// GRAFANA_LOGS_URL points directly to Loki (no intercepting proxy).
 			// Unlike Grafana, Prometheus, and Tempo, Loki has no stub layer here,
@@ -191,8 +213,8 @@ func (h *integrationHarness) params(group string) testscript.Params {
 			// a clear error message.
 			env.Setenv("GRAFANA_LOGS_URL", h.logsURL)
 			env.Setenv("GRAFANA_TRACES_URL", h.tracesProxy.URL)
-			env.Setenv("GRAFANA_ONCALL_URL", h.baseProxy.URL)
-			env.Setenv("GRAFANA_SYNTHETICS_BACKEND_URL", h.baseProxy.URL)
+			env.Setenv("GRAFANA_ONCALL_URL", h.oncallProxy.URL)
+			env.Setenv("GRAFANA_SYNTHETICS_BACKEND_URL", h.syntheticsProxy.URL)
 			env.Setenv("GRAFANA_SYNTHETICS_TOKEN", h.syntheticsToken)
 			env.Setenv("GRAFANA_SERVICE_ACCOUNT_ID", h.serviceAccount)
 			return nil
@@ -275,6 +297,17 @@ func newGrafanaProxy(upstream string) (*httptest.Server, error) {
 					},
 				},
 			})
+		default:
+			proxy.ServeHTTP(w, r)
+		}
+	}))
+
+	return server, nil
+}
+
+func newCloudProxy() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/stacks":
 			writeJSON(w, http.StatusOK, map[string]any{
 				"items": []map[string]any{
@@ -302,41 +335,10 @@ func newGrafanaProxy(upstream string) (*httptest.Server, error) {
 				"status": "active",
 				"region": "us",
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/check":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"items": []map[string]any{
-					{
-						"id":   1,
-						"name": "Checkout homepage",
-						"type": "http",
-					},
-				},
-			})
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/check/"):
-			writeJSON(w, http.StatusOK, map[string]any{
-				"id":   1,
-				"name": "Checkout homepage",
-				"type": "http",
-			})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/schedules/":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"results": []map[string]any{
-					{
-						"name": "Primary Operations",
-						"type": "calendar",
-						"team": map[string]any{
-							"name": "Operations",
-							"slug": "ops",
-						},
-					},
-				},
-			})
 		default:
-			proxy.ServeHTTP(w, r)
+			http.NotFound(w, r)
 		}
 	}))
-
-	return server, nil
 }
 
 func newPrometheusProxy(upstream string) (*httptest.Server, error) {
@@ -389,6 +391,52 @@ func newTracesProxy(upstream string) (*httptest.Server, error) {
 	}))
 
 	return server, nil
+}
+
+func newOnCallProxy() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/schedules/" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"results": []map[string]any{
+					{
+						"name": "Primary Operations",
+						"type": "calendar",
+						"team": map[string]any{
+							"name": "Operations",
+							"slug": "ops",
+						},
+					},
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+}
+
+func newSyntheticsProxy() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/check":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []map[string]any{
+					{
+						"id":   1,
+						"name": "Checkout homepage",
+						"type": "http",
+					},
+				},
+			})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/check/"):
+			writeJSON(w, http.StatusOK, map[string]any{
+				"id":   1,
+				"name": "Checkout homepage",
+				"type": "http",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

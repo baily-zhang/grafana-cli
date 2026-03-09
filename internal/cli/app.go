@@ -1108,6 +1108,7 @@ func (a *App) runIncident(ctx context.Context, opts globalOptions, args []string
 		return err
 	}
 	client := a.NewClient(cfg)
+	datasources, datasourceErr := client.ListDatasources(ctx)
 
 	plan := agent.BuildPlan(*goal, a.Now())
 	req := plan.AggregateRequest(a.Now())
@@ -1140,14 +1141,20 @@ func (a *App) runIncident(ctx context.Context, opts globalOptions, args []string
 	}
 
 	result := map[string]any{
-		"goal":      *goal,
-		"playbook":  plan.Playbook,
-		"request":   req,
-		"summary":   summarizeSnapshot(snapshot),
-		"generated": a.Now().UTC(),
+		"goal":               *goal,
+		"playbook":           plan.Playbook,
+		"request":            req,
+		"summary":            summarizeSnapshot(snapshot),
+		"generated":          a.Now().UTC(),
+		"datasource_summary": datasourceInventorySummary(datasources),
+		"query_hints":        datasourceQueryHints(req, plan.Playbook, datasources),
+	}
+	if datasourceErr != nil {
+		result["warnings"] = []string{"datasource inventory failed: " + datasourceErr.Error()}
 	}
 	if *includeRaw {
 		result["snapshot"] = snapshot
+		result["datasources"] = normalizeDatasourceCollection(datasources)
 	}
 
 	return a.emit(opts, result)
@@ -1264,6 +1271,7 @@ func (a *App) runAgent(ctx context.Context, opts globalOptions, args []string) e
 			return err
 		}
 		client := a.NewClient(cfg)
+		datasources, datasourceErr := client.ListDatasources(ctx)
 		stacks, err := client.CloudStacks(ctx)
 		if err != nil {
 			return err
@@ -1274,15 +1282,21 @@ func (a *App) runAgent(ctx context.Context, opts globalOptions, args []string) e
 			return err
 		}
 		result := map[string]any{
-			"plan":        plan,
-			"request":     req,
-			"summary":     summarizeSnapshot(snapshot),
-			"stack_count": inferCollectionCount(stacks),
-			"executed_at": a.Now().UTC(),
+			"plan":               plan,
+			"request":            req,
+			"summary":            summarizeSnapshot(snapshot),
+			"stack_count":        inferCollectionCount(stacks),
+			"executed_at":        a.Now().UTC(),
+			"datasource_summary": datasourceInventorySummary(datasources),
+			"query_hints":        datasourceQueryHints(req, plan.Playbook, datasources),
+		}
+		if datasourceErr != nil {
+			result["warnings"] = []string{"datasource inventory failed: " + datasourceErr.Error()}
 		}
 		if *includeRaw {
 			result["stacks"] = stacks
 			result["snapshot"] = snapshot
+			result["datasources"] = normalizeDatasourceCollection(datasources)
 		}
 		return a.emit(opts, result)
 	default:

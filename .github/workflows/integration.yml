@@ -52,6 +52,7 @@ jobs:
 
       - name: Run integration shard
         env:
+          GRAFANA_CLI_DISABLE_KEYRING: "1"
           INTEGRATION_TEST: ${{ matrix.shard.test }}
         run: |
           set -euo pipefail

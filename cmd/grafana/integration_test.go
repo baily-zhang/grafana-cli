@@ -175,6 +175,7 @@ func (h *integrationHarness) params(group string) testscript.Params {
 			runID := strings.ToLower(strconv.FormatInt(time.Now().UnixNano()%1679616, 36))
 			env.Setenv("HOME", env.Cd)
 			env.Setenv("XDG_CONFIG_HOME", configHome)
+			env.Setenv("GRAFANA_CLI_DISABLE_KEYRING", "1")
 			env.Setenv("GRAFANA_ITEST_RUN_ID", runID)
 			env.Setenv("GRAFANA_TOKEN", h.token)
 			env.Setenv("GRAFANA_BASE_URL", h.baseProxy.URL)

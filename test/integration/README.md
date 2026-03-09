@@ -34,6 +34,7 @@ Run all integration shards:
 set -a
 source "$env_file"
 set +a
+export GRAFANA_CLI_DISABLE_KEYRING=1
 go test -tags=integration ./cmd/grafana -count=1
 ```
 
@@ -43,6 +44,7 @@ Run one shard:
 set -a
 source "$env_file"
 set +a
+export GRAFANA_CLI_DISABLE_KEYRING=1
 go test -tags=integration ./cmd/grafana -run '^TestRuntimeObservability$' -count=1
 ```
 
@@ -68,6 +70,8 @@ The workflow follows the command-coverage groups used by the CLI tests:
 ## Notes
 
 Trace ingestion is real, but the Go integration harness serves `/api/search` through a local proxy. The minimal Tempo fixture accepts the spans, but its recent-search API is not stable enough in this setup to rely on directly for deterministic CI.
+
+The integration harness forces `GRAFANA_CLI_DISABLE_KEYRING=1` so `auth login` uses file-backed token storage instead of depending on a desktop keyring service in CI or headless local environments.
 
 The shard-to-command mapping lives in [command-coverage.json](/home/marctc/workspace/grafana-cli/test/integration/command-coverage.json). A unit test fails if the discovery schema adds a new leaf command that is not assigned to an integration shard.
 

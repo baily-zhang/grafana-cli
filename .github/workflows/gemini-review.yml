@@ -1,7 +1,11 @@
 name: Gemini PR Review
 
 on:
-  pull_request:
+  pull_request_target:
+
+concurrency:
+  group: '${{ github.workflow }}-${{ github.event.pull_request.number }}'
+  cancel-in-progress: true
 
 jobs:
   review:
@@ -12,6 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: google-gemini/gemini-code-assist@v1
+      - uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          prompt: 'Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}. Fetch the diff via the GitHub API and post a concise code review comment focusing on correctness, security, and code quality.'

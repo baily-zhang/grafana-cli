@@ -267,6 +267,12 @@ Releases are automatic on every merge to `main`. Versioning follows [Conventiona
 
 See [docs/discovery-first-plan.md](docs/discovery-first-plan.md) for the detailed plan.
 
+## License
+
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+Commercial licensing is available for organizations that cannot comply with AGPL obligations. Contact [@matiasvillaverde](https://github.com/matiasvillaverde) for details.
+
 ## Links
 
 - [Architecture](docs/architecture.md)

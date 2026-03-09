@@ -13,6 +13,8 @@ stdout '"Investigate incidents"'
 exec grafana assistant investigate --goal 'Checkout latency spike'
 stdout '"goal":"Checkout latency spike"'
 
+# The service account name "grafana-cli-integration" is set by test/integration/bootstrap.sh.
+# If the bootstrap script changes the SA name, update this assertion accordingly.
 exec grafana service-accounts list --query grafana-cli-integration
 stdout '"name":"grafana-cli-integration"'
 

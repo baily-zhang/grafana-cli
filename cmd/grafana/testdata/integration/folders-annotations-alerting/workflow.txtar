@@ -24,13 +24,18 @@ exec sh -c 'body=$(sed "s/__RUN_ID__/$GRAFANA_ITEST_RUN_ID/g" contact-point.json
 exec sh -c 'body=$(sed "s/__RUN_ID__/$GRAFANA_ITEST_RUN_ID/g" alert-rule.json); grafana api POST /api/v1/provisioning/alert-rules --yes --body "$body"'
 
 exec grafana alerting contact-points list
-stdout '"name":"grafana-cli-integration-contact"'
+stdout '"name":"grafana-cli-integration-contact-'
 
 exec grafana alerting rules list
 stdout '"title":"Grafana CLI Integration Rule"'
 
 exec grafana alerting policies get
 stdout '"receiver"'
+
+exec grafana api DELETE /api/v1/provisioning/alert-rules/grafana-cli-integration-rule-$GRAFANA_ITEST_RUN_ID --yes
+exec sh -c 'grafana api DELETE /api/v1/provisioning/contact-points/grafana-cli-integration-contact-$GRAFANA_ITEST_RUN_ID --yes'
+exec grafana api DELETE /api/dashboards/uid/integration-annotated-$GRAFANA_ITEST_RUN_ID --yes
+exec grafana api DELETE /api/folders/integration-folder-$GRAFANA_ITEST_RUN_ID --yes
 
 -- dashboard.json --
 {
@@ -64,7 +69,7 @@ stdout '"receiver"'
 -- contact-point.json --
 {
   "uid": "grafana-cli-integration-contact-__RUN_ID__",
-  "name": "grafana-cli-integration-contact",
+  "name": "grafana-cli-integration-contact-__RUN_ID__",
   "type": "email",
   "settings": {
     "addresses": "integration@example.com"
@@ -112,7 +117,7 @@ stdout '"receiver"'
   },
   "isPaused": false,
   "notification_settings": {
-    "receiver": "grafana-cli-integration-contact"
+    "receiver": "grafana-cli-integration-contact-__RUN_ID__"
   },
   "folderUID": "integration-folder-__RUN_ID__",
   "ruleGroup": "grafana-cli-integration"

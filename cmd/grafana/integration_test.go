@@ -48,6 +48,10 @@ func TestMain(m *testing.M) {
 		os.Exit(2)
 	}
 
+	// testscript.Main copies this binary to a temp $PATH directory as "grafana"
+	// so scripts can call `exec grafana`. It then calls os.Exit(m.Run()), bypassing
+	// any deferred harness.Close(). The OS reclaims httptest.Server resources on
+	// process exit, so this is a cosmetic resource leak only.
 	testscript.Main(m, map[string]func(){
 		"grafana": func() {
 			os.Exit(grafanaMain())
@@ -172,7 +176,7 @@ func (h *integrationHarness) params(group string) testscript.Params {
 		RequireUniqueNames:  true,
 		Setup: func(env *testscript.Env) error {
 			configHome := filepath.Join(env.Cd, ".config")
-			runID := strings.ToLower(strconv.FormatInt(time.Now().UnixNano()%1679616, 36))
+			runID := strings.ToLower(strconv.FormatInt(time.Now().UnixNano(), 36))
 			env.Setenv("HOME", env.Cd)
 			env.Setenv("XDG_CONFIG_HOME", configHome)
 			env.Setenv("GRAFANA_CLI_DISABLE_KEYRING", "1")
@@ -181,6 +185,10 @@ func (h *integrationHarness) params(group string) testscript.Params {
 			env.Setenv("GRAFANA_BASE_URL", h.baseProxy.URL)
 			env.Setenv("GRAFANA_CLOUD_URL", h.baseProxy.URL)
 			env.Setenv("GRAFANA_PROM_URL", h.promProxy.URL)
+			// GRAFANA_LOGS_URL points directly to Loki (no intercepting proxy).
+			// Unlike Grafana, Prometheus, and Tempo, Loki has no stub layer here,
+			// so a Loki outage will fail the runtime-observability shard without
+			// a clear error message.
 			env.Setenv("GRAFANA_LOGS_URL", h.logsURL)
 			env.Setenv("GRAFANA_TRACES_URL", h.tracesProxy.URL)
 			env.Setenv("GRAFANA_ONCALL_URL", h.baseProxy.URL)
@@ -340,10 +348,6 @@ func newPrometheusProxy(upstream string) (*httptest.Server, error) {
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 	}
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		return nil
-	}
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rewritten := r.Clone(r.Context())
 		if strings.HasPrefix(rewritten.URL.Path, "/api/prom/") {

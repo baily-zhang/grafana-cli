@@ -1,0 +1,17 @@
+name: Gemini PR Review
+
+on:
+  pull_request:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-gemini/gemini-code-assist@v1
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}

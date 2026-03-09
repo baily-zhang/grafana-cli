@@ -36,6 +36,10 @@ type APIClient interface {
 	DashboardVersions(ctx context.Context, uid string, limit int) (any, error)
 	RenderDashboard(ctx context.Context, req grafana.DashboardRenderRequest) (grafana.RenderedDashboard, error)
 	ListDatasources(ctx context.Context) (any, error)
+	GetDatasource(ctx context.Context, uid string) (any, error)
+	DatasourceHealth(ctx context.Context, uid string) (any, error)
+	DatasourceResource(ctx context.Context, method, uid, resourcePath string, body any) (any, error)
+	DatasourceQuery(ctx context.Context, req grafana.DatasourceQueryRequest) (any, error)
 	ListFolders(ctx context.Context) (any, error)
 	GetFolder(ctx context.Context, uid string) (any, error)
 	ServiceAccounts(ctx context.Context, req grafana.ServiceAccountListRequest) (any, error)
@@ -624,34 +628,6 @@ func (a *App) runDashboards(ctx context.Context, opts globalOptions, args []stri
 	default:
 		return fmt.Errorf("unknown dashboards command: %s", args[0])
 	}
-}
-
-func (a *App) runDatasources(ctx context.Context, opts globalOptions, args []string) error {
-	if len(args) == 0 || isHelpArg(args[0]) {
-		return a.emitHelp(opts, []string{"datasources"}, true)
-	}
-	if len(args) == 0 || args[0] != "list" {
-		return errors.New("usage: datasources list [--type TYPE] [--name NAME]")
-	}
-
-	fs := flag.NewFlagSet("datasources list", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	typeFilter := fs.String("type", "", "datasource type filter")
-	nameFilter := fs.String("name", "", "name substring filter")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-
-	cfg, err := a.requireAuthConfig()
-	if err != nil {
-		return err
-	}
-	result, err := a.NewClient(cfg).ListDatasources(ctx)
-	if err != nil {
-		return err
-	}
-	result = filterDatasources(result, *typeFilter, *nameFilter)
-	return a.emitWithMetadata(opts, result, collectionMetadata("datasources list", result, 0, ""))
 }
 
 func (a *App) runFolders(ctx context.Context, opts globalOptions, args []string) error {

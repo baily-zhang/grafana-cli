@@ -219,6 +219,21 @@ type fakeClient struct {
 	renderDashboardReq  grafana.DashboardRenderRequest
 	listDSResult        any
 	listDSErr           error
+	getDSResult         any
+	getDSErr            error
+	getDSUID            string
+	dsHealthResult      any
+	dsHealthErr         error
+	dsHealthUID         string
+	dsResourceResult    any
+	dsResourceErr       error
+	dsResourceMethod    string
+	dsResourceUID       string
+	dsResourcePath      string
+	dsResourceBody      any
+	dsQueryResult       any
+	dsQueryErr          error
+	dsQueryReq          grafana.DatasourceQueryRequest
 	listFoldersResult   any
 	listFoldersErr      error
 	getFolderResult     any
@@ -338,6 +353,29 @@ func (f *fakeClient) RenderDashboard(_ context.Context, req grafana.DashboardRen
 
 func (f *fakeClient) ListDatasources(_ context.Context) (any, error) {
 	return f.listDSResult, f.listDSErr
+}
+
+func (f *fakeClient) GetDatasource(_ context.Context, uid string) (any, error) {
+	f.getDSUID = uid
+	return f.getDSResult, f.getDSErr
+}
+
+func (f *fakeClient) DatasourceHealth(_ context.Context, uid string) (any, error) {
+	f.dsHealthUID = uid
+	return f.dsHealthResult, f.dsHealthErr
+}
+
+func (f *fakeClient) DatasourceResource(_ context.Context, method, uid, resourcePath string, body any) (any, error) {
+	f.dsResourceMethod = method
+	f.dsResourceUID = uid
+	f.dsResourcePath = resourcePath
+	f.dsResourceBody = body
+	return f.dsResourceResult, f.dsResourceErr
+}
+
+func (f *fakeClient) DatasourceQuery(_ context.Context, req grafana.DatasourceQueryRequest) (any, error) {
+	f.dsQueryReq = req
+	return f.dsQueryResult, f.dsQueryErr
 }
 
 func (f *fakeClient) ListFolders(_ context.Context) (any, error) {
@@ -820,8 +858,8 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 		searchDashResult: []any{map[string]any{"uid": "x"}},
 		createDashResult: map[string]any{"status": "success"},
 		listDSResult: []any{
-			map[string]any{"name": "prom", "type": "prometheus"},
-			map[string]any{"name": "loki", "type": "loki"},
+			map[string]any{"uid": "prom-uid", "name": "prom", "type": "prometheus"},
+			map[string]any{"uid": "loki-uid", "name": "loki", "type": "loki"},
 		},
 	}
 	app, out, errOut := newTestApp(store, client)
@@ -915,8 +953,11 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 	if err := json.Unmarshal([]byte(out.String()), &filtered); err != nil {
 		t.Fatalf("unexpected datasource JSON: %v", err)
 	}
-	if len(filtered) != 1 || filtered[0]["type"] != "loki" {
+	if len(filtered) != 1 || filtered[0]["type"] != "loki" || filtered[0]["typed_family"] != "loki" {
 		t.Fatalf("unexpected datasource filter output: %+v", filtered)
+	}
+	if filtered[0]["raw"].(map[string]any)["type"] != "loki" {
+		t.Fatalf("expected datasource raw payload preservation: %+v", filtered[0])
 	}
 	if code := app.Run(context.Background(), []string{"datasources", "bad"}); code != 1 {
 		t.Fatalf("invalid datasources usage should fail")

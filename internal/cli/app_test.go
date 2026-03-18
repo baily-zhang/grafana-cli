@@ -187,111 +187,124 @@ func (f *fakeContextStore) SaveContext(name string, cfg config.Config) error {
 }
 
 type fakeClient struct {
-	rawResult           any
-	rawErr              error
-	rawResponses        map[string]any
-	rawErrors           map[string]error
-	rawMethod           string
-	rawPath             string
-	rawBody             any
-	rawCalls            []string
-	cloudResult         any
-	cloudErr            error
-	cloudAccessResult   any
-	cloudAccessErr      error
-	cloudAccessReq      grafana.CloudAccessPolicyListRequest
-	cloudAccessOne      any
-	cloudAccessOneErr   error
-	cloudAccessID       string
-	cloudAccessRegion   string
-	searchDashResult    any
-	searchDashErr       error
-	getDashResult       any
-	getDashErr          error
-	createDashResult    any
-	createDashErr       error
-	deleteDashResult    any
-	deleteDashErr       error
-	dashVersionsResult  any
-	dashVersionsErr     error
-	renderDashboardResp grafana.RenderedDashboard
-	renderDashboardErr  error
-	renderDashboardReq  grafana.DashboardRenderRequest
-	listDSResult        any
-	listDSErr           error
-	getDSResult         any
-	getDSErr            error
-	getDSUID            string
-	dsHealthResult      any
-	dsHealthErr         error
-	dsHealthUID         string
-	dsResourceResult    any
-	dsResourceErr       error
-	dsResourceMethod    string
-	dsResourceUID       string
-	dsResourcePath      string
-	dsResourceBody      any
-	dsQueryResult       any
-	dsQueryErr          error
-	dsQueryReq          grafana.DatasourceQueryRequest
-	listFoldersResult   any
-	listFoldersErr      error
-	getFolderResult     any
-	getFolderErr        error
-	serviceAccountsResp any
-	serviceAccountsErr  error
-	serviceAccountsReq  grafana.ServiceAccountListRequest
-	serviceAccountResp  any
-	serviceAccountErr   error
-	serviceAccountID    int64
-	annotationsResult   any
-	annotationsErr      error
-	annotationsReq      grafana.AnnotationListRequest
-	alertRulesResult    any
-	alertRulesErr       error
-	alertContactResult  any
-	alertContactErr     error
-	alertPoliciesResult any
-	alertPoliciesErr    error
-	assistantChatResult any
-	assistantChatErr    error
-	assistantStatusResp any
-	assistantStatusErr  error
-	assistantSkillsResp any
-	assistantSkillsErr  error
-	assistantPrompt     string
-	assistantChatID     string
-	assistantStatusID   string
-	metricsResult       any
-	metricsErr          error
-	metricsExpr         string
-	metricsStart        string
-	metricsEnd          string
-	metricsStep         string
-	logsResult          any
-	logsErr             error
-	logsQuery           string
-	logsStart           string
-	logsEnd             string
-	logsLimit           int
-	tracesResult        any
-	tracesErr           error
-	tracesQuery         string
-	tracesStart         string
-	tracesEnd           string
-	tracesLimit         int
-	syntheticChecksResp any
-	syntheticChecksErr  error
-	syntheticChecksReq  grafana.SyntheticCheckListRequest
-	syntheticCheckResp  any
-	syntheticCheckErr   error
-	syntheticCheckReq   grafana.SyntheticCheckGetRequest
-	aggregateResult     grafana.AggregateSnapshot
-	aggregateErr        error
-	aggregateReq        grafana.AggregateRequest
-	createDashboardArg  map[string]any
-	createFolderID      int64
-	createOverwrite     bool
+	rawResult            any
+	rawErr               error
+	rawResponses         map[string]any
+	rawErrors            map[string]error
+	rawMethod            string
+	rawPath              string
+	rawBody              any
+	rawCalls             []string
+	cloudResult          any
+	cloudErr             error
+	cloudStackSlug       string
+	cloudStackDSResult   any
+	cloudStackDSErr      error
+	cloudStackConn       any
+	cloudStackConnErr    error
+	cloudStackPlugins    any
+	cloudStackPluginsErr error
+	cloudStackPluginID   string
+	cloudStackPlugin     any
+	cloudStackPluginErr  error
+	cloudBillingReq      grafana.CloudBilledUsageRequest
+	cloudBillingResp     any
+	cloudBillingErr      error
+	cloudAccessResult    any
+	cloudAccessErr       error
+	cloudAccessReq       grafana.CloudAccessPolicyListRequest
+	cloudAccessOne       any
+	cloudAccessOneErr    error
+	cloudAccessID        string
+	cloudAccessRegion    string
+	searchDashResult     any
+	searchDashErr        error
+	getDashResult        any
+	getDashErr           error
+	createDashResult     any
+	createDashErr        error
+	deleteDashResult     any
+	deleteDashErr        error
+	dashVersionsResult   any
+	dashVersionsErr      error
+	renderDashboardResp  grafana.RenderedDashboard
+	renderDashboardErr   error
+	renderDashboardReq   grafana.DashboardRenderRequest
+	listDSResult         any
+	listDSErr            error
+	getDSResult          any
+	getDSErr             error
+	getDSUID             string
+	dsHealthResult       any
+	dsHealthErr          error
+	dsHealthUID          string
+	dsResourceResult     any
+	dsResourceErr        error
+	dsResourceMethod     string
+	dsResourceUID        string
+	dsResourcePath       string
+	dsResourceBody       any
+	dsQueryResult        any
+	dsQueryErr           error
+	dsQueryReq           grafana.DatasourceQueryRequest
+	listFoldersResult    any
+	listFoldersErr       error
+	getFolderResult      any
+	getFolderErr         error
+	serviceAccountsResp  any
+	serviceAccountsErr   error
+	serviceAccountsReq   grafana.ServiceAccountListRequest
+	serviceAccountResp   any
+	serviceAccountErr    error
+	serviceAccountID     int64
+	annotationsResult    any
+	annotationsErr       error
+	annotationsReq       grafana.AnnotationListRequest
+	alertRulesResult     any
+	alertRulesErr        error
+	alertContactResult   any
+	alertContactErr      error
+	alertPoliciesResult  any
+	alertPoliciesErr     error
+	assistantChatResult  any
+	assistantChatErr     error
+	assistantStatusResp  any
+	assistantStatusErr   error
+	assistantSkillsResp  any
+	assistantSkillsErr   error
+	assistantPrompt      string
+	assistantChatID      string
+	assistantStatusID    string
+	metricsResult        any
+	metricsErr           error
+	metricsExpr          string
+	metricsStart         string
+	metricsEnd           string
+	metricsStep          string
+	logsResult           any
+	logsErr              error
+	logsQuery            string
+	logsStart            string
+	logsEnd              string
+	logsLimit            int
+	tracesResult         any
+	tracesErr            error
+	tracesQuery          string
+	tracesStart          string
+	tracesEnd            string
+	tracesLimit          int
+	syntheticChecksResp  any
+	syntheticChecksErr   error
+	syntheticChecksReq   grafana.SyntheticCheckListRequest
+	syntheticCheckResp   any
+	syntheticCheckErr    error
+	syntheticCheckReq    grafana.SyntheticCheckGetRequest
+	aggregateResult      grafana.AggregateSnapshot
+	aggregateErr         error
+	aggregateReq         grafana.AggregateRequest
+	createDashboardArg   map[string]any
+	createFolderID       int64
+	createOverwrite      bool
 }
 
 func (f *fakeClient) Raw(_ context.Context, method, path string, body any) (any, error) {
@@ -310,6 +323,32 @@ func (f *fakeClient) Raw(_ context.Context, method, path string, body any) (any,
 
 func (f *fakeClient) CloudStacks(_ context.Context) (any, error) {
 	return f.cloudResult, f.cloudErr
+}
+
+func (f *fakeClient) CloudStackDatasources(_ context.Context, stack string) (any, error) {
+	f.cloudStackSlug = stack
+	return f.cloudStackDSResult, f.cloudStackDSErr
+}
+
+func (f *fakeClient) CloudStackConnections(_ context.Context, stack string) (any, error) {
+	f.cloudStackSlug = stack
+	return f.cloudStackConn, f.cloudStackConnErr
+}
+
+func (f *fakeClient) CloudStackPlugins(_ context.Context, stack string) (any, error) {
+	f.cloudStackSlug = stack
+	return f.cloudStackPlugins, f.cloudStackPluginsErr
+}
+
+func (f *fakeClient) CloudStackPlugin(_ context.Context, stack, plugin string) (any, error) {
+	f.cloudStackSlug = stack
+	f.cloudStackPluginID = plugin
+	return f.cloudStackPlugin, f.cloudStackPluginErr
+}
+
+func (f *fakeClient) CloudBilledUsage(_ context.Context, req grafana.CloudBilledUsageRequest) (any, error) {
+	f.cloudBillingReq = req
+	return f.cloudBillingResp, f.cloudBillingErr
 }
 
 func (f *fakeClient) CloudAccessPolicies(_ context.Context, req grafana.CloudAccessPolicyListRequest) (any, error) {
@@ -853,8 +892,44 @@ func TestCommandErrorsFromStore(t *testing.T) {
 func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 	store := &fakeStore{cfg: config.Config{Token: "token"}}
 	client := &fakeClient{
-		rawResult:        map[string]any{"ok": true},
-		cloudResult:      map[string]any{"items": []any{map[string]any{"id": 1}}},
+		rawResult: map[string]any{"ok": true},
+		cloudResult: map[string]any{"items": []any{
+			map[string]any{"id": 1, "slug": "local-stack", "region": "us"},
+		}},
+		cloudStackDSResult: map[string]any{"items": []any{
+			map[string]any{"uid": "prom-uid", "name": "prom", "type": "prometheus", "url": "https://prom"},
+			map[string]any{"uid": "loki-uid", "name": "loki", "type": "loki", "url": "https://logs"},
+			map[string]any{"uid": "tempo-uid", "name": "tempo", "type": "tempo", "url": "https://traces"},
+		}},
+		cloudStackConn: map[string]any{
+			"connections": []any{
+				map[string]any{"type": "oncall", "details": map[string]any{"oncallApiUrl": "https://oncall"}},
+			},
+			"privateConnectivityInfo": map[string]any{
+				"tenants": []any{map[string]any{"type": "prometheus"}},
+			},
+		},
+		cloudStackPlugins: map[string]any{"items": []any{
+			map[string]any{"id": "grafana-oncall-app", "name": "Grafana OnCall", "version": "1.0.0"},
+			map[string]any{"id": "grafana-incident-app", "name": "Grafana IRM", "version": "1.1.0"},
+		}},
+		cloudStackPlugin: map[string]any{"id": "grafana-oncall-app", "name": "Grafana OnCall", "version": "1.0.0"},
+		cloudBillingResp: map[string]any{"items": []any{
+			map[string]any{
+				"dimensionName": "Logs",
+				"amountDue":     100.5,
+				"periodStart":   "2024-09-01T00:00:00Z",
+				"periodEnd":     "2024-09-30T23:59:59Z",
+				"usages":        []any{map[string]any{"stackName": "local-stack.grafana.net"}},
+			},
+			map[string]any{
+				"dimensionName": "Metrics",
+				"amountDue":     778.41,
+				"periodStart":   "2024-09-01T00:00:00Z",
+				"periodEnd":     "2024-09-30T23:59:59Z",
+				"usages":        []any{map[string]any{"stackName": "local-stack.grafana.net"}},
+			},
+		}},
 		searchDashResult: []any{map[string]any{"uid": "x"}},
 		createDashResult: map[string]any{"status": "success"},
 		listDSResult: []any{
@@ -899,6 +974,21 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 		t.Fatalf("unexpected cloud output")
 	}
 	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "inspect", "--stack", "local-stack"}); code != 0 {
+		t.Fatalf("cloud inspect should succeed: %s", errOut.String())
+	}
+	inspect := decodeJSON(t, out.String())
+	inferred := inspect["inferred_endpoints"].(map[string]any)
+	if client.cloudStackSlug != "local-stack" || inferred["prometheus_url"] != "https://prom" || inferred["oncall_url"] != "https://oncall" {
+		t.Fatalf("unexpected cloud inspect payload: %+v", inspect)
+	}
+	if inspect["datasource_summary"].(map[string]any)["count"] != float64(3) {
+		t.Fatalf("expected datasource summary in cloud inspect: %+v", inspect)
+	}
+	if inspect["connectivity_summary"].(map[string]any)["has_private_connectivity"] != true {
+		t.Fatalf("expected connectivity summary in cloud inspect: %+v", inspect)
+	}
+	out.Reset()
 	if code := app.Run(context.Background(), []string{"cloud"}); code != 0 {
 		t.Fatalf("cloud help should succeed")
 	}
@@ -911,6 +1001,132 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"cloud", "stacks", "bad"}); code != 1 {
 		t.Fatalf("cloud stacks bad verb should fail")
 	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "inspect"}); code != 1 {
+		t.Fatalf("cloud inspect missing stack should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "inspect", "--stack", "missing"}); code != 1 {
+		t.Fatalf("cloud inspect missing stack lookup should fail")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "list", "--stack", "local-stack", "--query", "oncall", "--limit", "1"}); code != 0 {
+		t.Fatalf("cloud stack plugins list should succeed: %s", errOut.String())
+	}
+	plugins := decodeJSON(t, out.String())
+	if client.cloudStackSlug != "local-stack" || len(plugins["items"].([]any)) != 1 {
+		t.Fatalf("unexpected cloud stack plugins list payload: %+v", plugins)
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "get", "--stack", "local-stack", "--plugin", "grafana-oncall-app"}); code != 0 {
+		t.Fatalf("cloud stack plugin get should succeed: %s", errOut.String())
+	}
+	plugin := decodeJSON(t, out.String())
+	if client.cloudStackPluginID != "grafana-oncall-app" || plugin["id"] != "grafana-oncall-app" {
+		t.Fatalf("unexpected cloud stack plugin payload: %+v", plugin)
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins"}); code != 0 {
+		t.Fatalf("cloud stacks plugins help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected cloud stack plugins discovery output")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "-help"}); code != 0 {
+		t.Fatalf("cloud stacks plugins explicit help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected explicit cloud stack plugins discovery output")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "list", "--stack", "local-stack", "--limit", "0"}); code != 1 {
+		t.Fatalf("cloud stack plugins list invalid limit should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "list"}); code != 1 {
+		t.Fatalf("cloud stack plugins list missing stack should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "list", "--bad"}); code != 1 {
+		t.Fatalf("cloud stack plugins list parse should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "get", "--stack", "local-stack"}); code != 1 {
+		t.Fatalf("cloud stack plugin get missing plugin should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "get", "--stack", "https://example.com", "--plugin", "grafana-oncall-app"}); code != 1 {
+		t.Fatalf("cloud stack plugin get invalid stack should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "get", "--bad"}); code != 1 {
+		t.Fatalf("cloud stack plugin get parse should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "bad"}); code != 1 {
+		t.Fatalf("cloud stack plugins bad verb should fail")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--agent", "cloud", "stacks", "plugins", "list", "--stack", "local-stack", "--limit", "1"}); code != 0 {
+		t.Fatalf("cloud stack plugins list envelope should succeed: %s", errOut.String())
+	}
+	pluginsEnvelope := decodeJSON(t, out.String())
+	pluginsMeta := pluginsEnvelope["metadata"].(map[string]any)
+	if pluginsMeta["command"] != "cloud stacks plugins list" || pluginsMeta["truncated"] != true {
+		t.Fatalf("unexpected cloud stack plugins metadata: %+v", pluginsMeta)
+	}
+	client.cloudStackPluginsErr = errors.New("plugins failed")
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "list", "--stack", "local-stack"}); code != 1 {
+		t.Fatalf("cloud stack plugins list client error should fail")
+	}
+	client.cloudStackPluginsErr = nil
+	client.cloudStackPluginErr = errors.New("plugin failed")
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "plugins", "get", "--stack", "local-stack", "--plugin", "grafana-oncall-app"}); code != 1 {
+		t.Fatalf("cloud stack plugin get client error should fail")
+	}
+	client.cloudStackPluginErr = nil
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--agent", "cloud", "billed-usage", "get", "--org-slug", "local-org", "--year", "2024", "--month", "9"}); code != 0 {
+		t.Fatalf("cloud billed usage should succeed: %s", errOut.String())
+	}
+	billingEnvelope := decodeJSON(t, out.String())
+	billingData := billingEnvelope["data"].(map[string]any)
+	billingMeta := billingEnvelope["metadata"].(map[string]any)
+	if billingMeta["command"] != "cloud billed-usage get" || client.cloudBillingReq.OrgSlug != "local-org" || client.cloudBillingReq.Year != 2024 || client.cloudBillingReq.Month != 9 {
+		t.Fatalf("unexpected cloud billed usage metadata or request: meta=%+v req=%+v", billingMeta, client.cloudBillingReq)
+	}
+	if billingData["org_slug"] != "local-org" || billingData["summary"].(map[string]any)["total_amount_due"] != 878.91 {
+		t.Fatalf("unexpected cloud billed usage payload: %+v", billingData)
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage"}); code != 0 {
+		t.Fatalf("cloud billed usage help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected cloud billed usage discovery output")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "-help"}); code != 0 {
+		t.Fatalf("cloud billed usage explicit help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected explicit cloud billed usage discovery output")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "bad"}); code != 1 {
+		t.Fatalf("cloud billed usage bad verb should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get", "--year", "2024", "--month", "9"}); code != 1 {
+		t.Fatalf("cloud billed usage missing org slug should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get"}); code != 1 {
+		t.Fatalf("cloud billed usage missing args should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get", "--org-slug", "local-org", "--year", "2024", "--month", "13"}); code != 1 {
+		t.Fatalf("cloud billed usage invalid month should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get", "--org-slug", "local-org", "--year", "0", "--month", "9"}); code != 1 {
+		t.Fatalf("cloud billed usage invalid year should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get", "--bad"}); code != 1 {
+		t.Fatalf("cloud billed usage parse should fail")
+	}
+	client.cloudBillingErr = errors.New("billing failed")
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get", "--org-slug", "local-org", "--year", "2024", "--month", "9"}); code != 1 {
+		t.Fatalf("cloud billed usage client error should fail")
+	}
+	client.cloudBillingErr = nil
 
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"dashboards", "list", "--query", "err"}); code != 0 {
@@ -964,6 +1180,61 @@ func TestAPICloudDashboardDatasourceCommands(t *testing.T) {
 	}
 	if code := app.Run(context.Background(), []string{"datasources", "list", "--bad"}); code != 1 {
 		t.Fatalf("datasources list parse should fail")
+	}
+}
+
+func TestCloudStacksInspectWarningsAndHelp(t *testing.T) {
+	store := &fakeStore{cfg: config.Config{Token: "token"}}
+	client := &fakeClient{
+		cloudResult: map[string]any{"items": []any{
+			map[string]any{"slug": "local-stack", "region": "us"},
+		}},
+		cloudStackDSErr:   errors.New("datasources failed"),
+		cloudStackConnErr: errors.New("connections failed"),
+	}
+	app, out, errOut := newTestApp(store, client)
+
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "-help"}); code != 0 {
+		t.Fatalf("cloud stacks help should succeed: %s", errOut.String())
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected cloud stacks discovery output")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"cloud", "stacks"}); code != 0 {
+		t.Fatalf("cloud stacks subtree help should succeed: %s", errOut.String())
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected cloud stacks subtree discovery output")
+	}
+
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "list", "extra"}); code != 1 {
+		t.Fatalf("cloud stacks list extra args should fail")
+	}
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "inspect", "--bad"}); code != 1 {
+		t.Fatalf("cloud inspect parse error should fail")
+	}
+
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--agent", "cloud", "stacks", "inspect", "--stack", "local-stack", "--include-raw"}); code != 0 {
+		t.Fatalf("cloud inspect with warnings should succeed: %s", errOut.String())
+	}
+	envelope := decodeJSON(t, out.String())
+	meta := envelope["metadata"].(map[string]any)
+	if meta["command"] != "cloud stacks inspect" || len(meta["warnings"].([]any)) != 2 {
+		t.Fatalf("unexpected cloud inspect metadata: %+v", meta)
+	}
+	data := envelope["data"].(map[string]any)
+	if _, ok := data["datasources"]; !ok {
+		t.Fatalf("expected include-raw datasources field in inspect payload")
+	}
+	if _, ok := data["connections"]; !ok {
+		t.Fatalf("expected include-raw connections field in inspect payload")
+	}
+
+	client.cloudErr = errors.New("cloud inspect failed")
+	if code := app.Run(context.Background(), []string{"cloud", "stacks", "inspect", "--stack", "local-stack"}); code != 1 {
+		t.Fatalf("cloud inspect cloud client error should fail")
 	}
 }
 
@@ -2778,6 +3049,9 @@ func TestAppErrorBranches(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"cloud", "access-policies", "list", "--region", "us"}); code != 1 {
 		t.Fatalf("expected cloud access-policies auth error")
 	}
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get", "--org-slug", "local-org", "--year", "2024", "--month", "9"}); code != 1 {
+		t.Fatalf("expected cloud billed-usage auth error")
+	}
 
 	// runDashboards list and create client error branches + create parse error.
 	store = &fakeStore{cfg: config.Config{Token: "x"}}
@@ -2821,6 +3095,11 @@ func TestAppErrorBranches(t *testing.T) {
 	app, _, _ = newTestApp(store, client)
 	if code := app.Run(context.Background(), []string{"cloud", "access-policies", "list", "--region", "us"}); code != 1 {
 		t.Fatalf("expected cloud access-policies client error")
+	}
+	client = &fakeClient{cloudBillingErr: errors.New("cloud billing fail")}
+	app, _, _ = newTestApp(store, client)
+	if code := app.Run(context.Background(), []string{"cloud", "billed-usage", "get", "--org-slug", "local-org", "--year", "2024", "--month", "9"}); code != 1 {
+		t.Fatalf("expected cloud billed-usage client error")
 	}
 	client = &fakeClient{cloudAccessOneErr: errors.New("cloud access get fail")}
 	app, _, _ = newTestApp(store, client)
@@ -3232,6 +3511,33 @@ func TestAuthInferenceHelpers(t *testing.T) {
 	if _, _, err := normalizeStackIdentifier(""); err == nil {
 		t.Fatalf("expected empty stack error")
 	}
+	var target cloudStackTarget
+	if err := target.Set("prod-observability.grafana.net"); err != nil {
+		t.Fatalf("unexpected cloud stack target parse error: %v", err)
+	}
+	if target.Slug != "prod-observability" || target.BaseURL != "https://prod-observability.grafana.net" {
+		t.Fatalf("unexpected cloud stack target: %+v", target)
+	}
+	if target.String() != "https://prod-observability.grafana.net" {
+		t.Fatalf("unexpected cloud stack target string: %s", target.String())
+	}
+	if required, err := target.required(); err != nil || required.Slug != "prod-observability" {
+		t.Fatalf("unexpected required cloud stack target: %+v err=%v", required, err)
+	}
+	var emptyTarget cloudStackTarget
+	if _, err := emptyTarget.required(); err == nil {
+		t.Fatalf("expected empty required cloud stack target error")
+	}
+	if err := emptyTarget.Set("https://example.com"); err == nil {
+		t.Fatalf("expected invalid cloud stack target error")
+	}
+	fs, parsedTarget := newCloudStackFlagSet("cloud stacks test")
+	if err := fs.Parse([]string{"--stack", "https://prod-observability.grafana.net"}); err != nil {
+		t.Fatalf("unexpected cloud stack flag parse error: %v", err)
+	}
+	if parsedTarget.Slug != "prod-observability" || parsedTarget.BaseURL != "https://prod-observability.grafana.net" {
+		t.Fatalf("unexpected parsed cloud stack target: %+v", parsedTarget)
+	}
 
 	endpoints := inferDatasourceEndpoints([]any{
 		map[string]any{"type": "prometheus", "url": "https://prom"},
@@ -3246,6 +3552,18 @@ func TestAuthInferenceHelpers(t *testing.T) {
 	}
 	if endpoints := inferDatasourceEndpoints("scalar"); endpoints.PrometheusURL != "" || endpoints.LogsURL != "" || endpoints.TracesURL != "" {
 		t.Fatalf("expected empty datasource inference for scalar payload, got %+v", endpoints)
+	}
+	stackList := map[string]any{"items": []any{
+		map[string]any{"slug": "prod-observability", "region": "us"},
+	}}
+	if stack, ok := cloudStackBySlug(stackList, "prod-observability"); !ok || stack["region"] != "us" {
+		t.Fatalf("unexpected cloud stack lookup: ok=%v stack=%+v", ok, stack)
+	}
+	if _, ok := cloudStackBySlug(map[string]any{"items": []any{"bad"}}, "prod-observability"); ok {
+		t.Fatalf("expected cloud stack lookup to ignore invalid records")
+	}
+	if _, ok := cloudStackBySlug("scalar", "prod-observability"); ok {
+		t.Fatalf("expected cloud stack lookup to fail for scalar payload")
 	}
 	if oncallURL := inferOnCallURL(map[string]any{"connections": []any{
 		map[string]any{"type": "oncall", "details": map[string]any{"oncallApiUrl": "https://oncall"}},
@@ -3282,6 +3600,73 @@ func TestAuthInferenceHelpers(t *testing.T) {
 	}
 	if containsAny("grafana-runtime", "oncall", "schedules") {
 		t.Fatalf("expected containsAny to miss")
+	}
+	connectionSummary := cloudStackConnectivitySummary(map[string]any{
+		"connections": []any{
+			map[string]any{"type": "oncall"},
+			map[string]any{"type": "pagerduty"},
+		},
+		"privateConnectivityInfo": map[string]any{
+			"tenants": []any{
+				map[string]any{"type": "prometheus"},
+				map[string]any{"type": "logs"},
+			},
+		},
+	})
+	if connectionSummary["has_private_connectivity"] != true || len(connectionSummary["connection_types"].([]string)) != 2 {
+		t.Fatalf("unexpected cloud connectivity summary: %+v", connectionSummary)
+	}
+	if summary := cloudStackConnectivitySummary(map[string]any{"connections": []any{"bad"}}); summary["has_private_connectivity"] != false {
+		t.Fatalf("expected cloud connectivity summary without private tenants: %+v", summary)
+	}
+	if summary := cloudStackConnectivitySummary(map[string]any{
+		"privateConnectivityInfo": map[string]any{"tenants": []any{"bad"}},
+	}); summary["has_private_connectivity"] != false {
+		t.Fatalf("expected cloud connectivity summary to ignore invalid private tenant records: %+v", summary)
+	}
+	if items := cloudStackDatasourceItems("scalar"); items != nil {
+		t.Fatalf("expected nil cloud datasource items for scalar payload")
+	}
+	if items := cloudStackConnectionItems(map[string]any{"connections": []any{map[string]any{"type": "oncall"}}}); len(items) != 1 {
+		t.Fatalf("unexpected cloud connection items: %+v", items)
+	}
+	if items := cloudStackConnectionItems(map[string]any{"items": []any{map[string]any{"type": "oncall"}}}); len(items) != 1 {
+		t.Fatalf("unexpected cloud connection items from collection payload: %+v", items)
+	}
+	inspectPayload := buildCloudStackInspectPayload(
+		map[string]any{"slug": "prod-observability"},
+		"https://prod-observability.grafana.net",
+		map[string]any{"items": []any{
+			map[string]any{"uid": "prom", "name": "metrics", "type": "prometheus", "url": "https://prom"},
+		}},
+		map[string]any{"connections": []any{
+			map[string]any{"type": "oncall", "details": map[string]any{"oncallApiUrl": "https://oncall"}},
+		}},
+		true,
+	)
+	if inspectPayload["inferred_endpoints"].(map[string]any)["oncall_url"] != "https://oncall" || len(inspectPayload["datasources"].([]any)) != 1 {
+		t.Fatalf("unexpected cloud inspect payload: %+v", inspectPayload)
+	}
+	billingPayload := buildCloudBilledUsagePayload("local-org", 2024, 9, map[string]any{
+		"items": []any{
+			map[string]any{
+				"dimensionName": "Logs",
+				"amountDue":     100.5,
+				"periodStart":   "2024-09-01T00:00:00Z",
+				"periodEnd":     "2024-09-30T23:59:59Z",
+				"usages": []any{
+					map[string]any{"stackName": "stack-a"},
+					"bad",
+				},
+			},
+			"bad",
+		},
+	})
+	if billingPayload["org_slug"] != "local-org" || billingPayload["summary"].(map[string]any)["stack_count"] != 1 {
+		t.Fatalf("unexpected cloud billed usage payload: %+v", billingPayload)
+	}
+	if summary := cloudBilledUsageSummary(nil); summary["items"] != 0 || summary["total_amount_due"] != 0.0 {
+		t.Fatalf("unexpected empty cloud billed usage summary: %+v", summary)
 	}
 
 	app := NewApp(&fakeStore{})

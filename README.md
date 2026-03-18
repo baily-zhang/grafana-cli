@@ -24,6 +24,9 @@ grafana auth doctor
 # Inspect activation surfaces
 grafana service-accounts list
 grafana cloud access-policies list --region us
+grafana cloud billed-usage get --org-slug my-org --year 2024 --month 9
+grafana cloud stacks inspect --stack my-stack
+grafana cloud stacks plugins list --stack my-stack
 
 # Inspect Synthetic Monitoring checks
 grafana synthetics checks list \
@@ -214,6 +217,9 @@ Supported datasource families:
 | `service-accounts get --id ...` | Fetch one service account by ID |
 | `cloud access-policies list --region ...` | List Grafana Cloud access policies for a region |
 | `cloud access-policies get --id ... --region ...` | Fetch one Grafana Cloud access policy |
+| `cloud billed-usage get --org-slug ... --year ... --month ...` | Fetch billed usage for a Grafana Cloud organization and month |
+| `cloud stacks plugins list --stack ...` | List plugins installed on a Grafana Cloud stack |
+| `cloud stacks plugins get --stack ... --plugin ...` | Fetch one installed stack plugin |
 | `synthetics checks list --backend-url ... --token ...` | List Synthetic Monitoring checks |
 | `synthetics checks get --backend-url ... --token ... --id ...` | Fetch one Synthetic Monitoring check |
 
@@ -235,6 +241,7 @@ Supported datasource families:
 | Command | Description |
 |---------|-------------|
 | `cloud stacks list` | List Grafana Cloud stacks |
+| `cloud stacks inspect --stack ...` | Infer stack runtime endpoints and connectivity from the Cloud API |
 | `api <METHOD> <PATH>` | Call the raw Grafana HTTP API directly |
 
 </details>

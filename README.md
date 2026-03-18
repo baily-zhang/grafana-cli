@@ -215,10 +215,10 @@ Supported datasource families:
 |---------|-------------|
 | `service-accounts list` | Search Grafana service accounts with paging metadata |
 | `service-accounts get --id ...` | Fetch one service account by ID |
-| `cloud access-policies list --region ...` | List Grafana Cloud access policies for a region |
+| `cloud access-policies list --region ...` | List Grafana Cloud access policies for a region with auto-pagination up to `--limit` |
 | `cloud access-policies get --id ... --region ...` | Fetch one Grafana Cloud access policy |
 | `cloud billed-usage get --org-slug ... --year ... --month ...` | Fetch billed usage for a Grafana Cloud organization and month |
-| `cloud stacks plugins list --stack ...` | List plugins installed on a Grafana Cloud stack |
+| `cloud stacks plugins list --stack ...` | List plugins installed on a Grafana Cloud stack with auto-pagination up to `--limit` |
 | `cloud stacks plugins get --stack ... --plugin ...` | Fetch one installed stack plugin |
 | `synthetics checks list --backend-url ... --token ...` | List Synthetic Monitoring checks |
 | `synthetics checks get --backend-url ... --token ... --id ...` | Fetch one Synthetic Monitoring check |
@@ -276,6 +276,8 @@ When `--agent` is passed, the CLI wraps every response in a deterministic envelo
 ```
 
 Metadata includes `count`, `truncated`, `command`, `next_action`, and optional `warnings`.
+
+Cloud list commands follow server pagination up to `--limit`. `cloud stacks inspect` exits with an error in normal CLI mode if datasource or connection discovery is incomplete; in agent mode the same partial result is returned with warnings in `metadata.warnings`.
 
 ## Discovery
 

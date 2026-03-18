@@ -75,6 +75,30 @@ Trace ingestion is real, but the Go integration harness serves `/api/search` thr
 
 Cloud, OnCall, and Synthetic Monitoring assertions run against dedicated local stub servers so the commands still exercise their real base-URL separation without depending on external Grafana Cloud services.
 
+## Real Cloud contract tests
+
+There is also an opt-in Grafana Cloud contract suite for read-only Cloud commands. It is intentionally separate from the local Docker-based suite and only runs when you provide live Cloud credentials.
+
+Required environment:
+
+- `GRAFANA_CLI_INTEGRATION_CLOUD_URL`
+- `GRAFANA_CLI_INTEGRATION_CLOUD_TOKEN`
+- `GRAFANA_CLI_INTEGRATION_CLOUD_STACK`
+
+Optional environment for broader coverage:
+
+- `GRAFANA_CLI_INTEGRATION_CLOUD_ACCESS_REGION`
+- `GRAFANA_CLI_INTEGRATION_CLOUD_ORG_SLUG`
+- `GRAFANA_CLI_INTEGRATION_CLOUD_BILLED_USAGE_YEAR`
+- `GRAFANA_CLI_INTEGRATION_CLOUD_BILLED_USAGE_MONTH`
+
+Run the live Cloud contract suite:
+
+```bash
+export GRAFANA_CLI_DISABLE_KEYRING=1
+go test -tags=integrationcloud ./cmd/grafana -run '^TestRealCloudCommands$' -count=1
+```
+
 Assistant, SLO, and IRM assertions use deterministic plugin-response stubs on top of the local Grafana proxy because the Docker stack does not ship those Grafana apps.
 
 The integration harness forces `GRAFANA_CLI_DISABLE_KEYRING=1` so `auth login` uses file-backed token storage instead of depending on a desktop keyring service in CI or headless local environments.

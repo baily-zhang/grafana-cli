@@ -50,6 +50,9 @@ stdout '"total_amount_due":878.91'
 exec grafana cloud access-policies list --region us
 stdout '"name":"Local integration policy"'
 
+exec grafana cloud access-policies list --region us --limit 2
+stdout '"name":"Local integration writer policy"'
+
 exec grafana cloud access-policies get --id policy-1 --region us
 stdout '"id":"policy-1"'
 

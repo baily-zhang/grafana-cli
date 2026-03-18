@@ -420,6 +420,19 @@ func newCloudProxy() *httptest.Server {
 				},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accesspolicies":
+			if r.URL.Query().Get("pageCursor") == "cursor-2" {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"items": []map[string]any{
+						{
+							"id":     "policy-2",
+							"name":   "Local integration writer policy",
+							"status": "active",
+							"region": "us",
+						},
+					},
+				})
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"items": []map[string]any{
 					{
@@ -428,6 +441,9 @@ func newCloudProxy() *httptest.Server {
 						"status": "active",
 						"region": "us",
 					},
+				},
+				"metadata": map[string]any{
+					"pagination": map[string]any{"nextPage": "/api/v1/accesspolicies?pageCursor=cursor-2"},
 				},
 			})
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/accesspolicies/"):

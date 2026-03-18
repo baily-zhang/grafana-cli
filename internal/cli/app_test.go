@@ -213,6 +213,7 @@ type fakeClient struct {
 	cloudBillingResp     any
 	cloudBillingErr      error
 	cloudAccessResult    any
+	cloudAccessPages     map[string]any
 	cloudAccessErr       error
 	cloudAccessReq       grafana.CloudAccessPolicyListRequest
 	cloudAccessOne       any
@@ -367,6 +368,11 @@ func (f *fakeClient) CloudBilledUsage(_ context.Context, req grafana.CloudBilled
 
 func (f *fakeClient) CloudAccessPolicies(_ context.Context, req grafana.CloudAccessPolicyListRequest) (any, error) {
 	f.cloudAccessReq = req
+	if f.cloudAccessPages != nil {
+		if result, ok := f.cloudAccessPages[req.PageCursor]; ok {
+			return result, f.cloudAccessErr
+		}
+	}
 	return f.cloudAccessResult, f.cloudAccessErr
 }
 
@@ -1507,10 +1513,15 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 func TestCloudAccessServiceAccountsAndSyntheticsCommands(t *testing.T) {
 	store := &fakeStore{cfg: config.Config{Token: "token"}}
 	client := &fakeClient{
-		cloudAccessResult: map[string]any{
-			"items": []any{map[string]any{"id": "ap-1", "name": "stack-readers"}},
-			"metadata": map[string]any{
-				"pagination": map[string]any{"nextPage": "/v1/accesspolicies?pageCursor=abc"},
+		cloudAccessPages: map[string]any{
+			"": map[string]any{
+				"items": []any{map[string]any{"id": "ap-1", "name": "stack-readers"}},
+				"metadata": map[string]any{
+					"pagination": map[string]any{"nextPage": "/v1/accesspolicies?pageCursor=abc"},
+				},
+			},
+			"abc": map[string]any{
+				"items": []any{map[string]any{"id": "ap-2", "name": "stack-writers"}},
 			},
 		},
 		cloudAccessOne:      map[string]any{"id": "ap-1", "name": "stack-readers"},
@@ -1521,19 +1532,23 @@ func TestCloudAccessServiceAccountsAndSyntheticsCommands(t *testing.T) {
 	}
 	app, out, errOut := newTestApp(store, client)
 
-	if code := app.Run(context.Background(), []string{"--agent", "cloud", "access-policies", "list", "--region", "us", "--realm-type", "stack", "--realm-identifier", "123", "--status", "active", "--page-size", "50", "--page-cursor", "cursor-1"}); code != 0 {
+	if code := app.Run(context.Background(), []string{"--agent", "cloud", "access-policies", "list", "--region", "us", "--realm-type", "stack", "--realm-identifier", "123", "--status", "active", "--page-size", "50", "--limit", "2"}); code != 0 {
 		t.Fatalf("cloud access-policies list should succeed: %s", errOut.String())
 	}
-	if client.cloudAccessReq.Region != "us" || client.cloudAccessReq.RealmType != "stack" || client.cloudAccessReq.RealmIdentifier != "123" || client.cloudAccessReq.Status != "active" || client.cloudAccessReq.PageSize != 50 || client.cloudAccessReq.PageCursor != "cursor-1" {
+	if client.cloudAccessReq.Region != "us" || client.cloudAccessReq.RealmType != "stack" || client.cloudAccessReq.RealmIdentifier != "123" || client.cloudAccessReq.Status != "active" || client.cloudAccessReq.PageSize != 1 || client.cloudAccessReq.PageCursor != "abc" {
 		t.Fatalf("unexpected cloud access request: %+v", client.cloudAccessReq)
 	}
 	accessEnvelope := decodeJSON(t, out.String())
 	accessMeta := accessEnvelope["metadata"].(map[string]any)
-	if accessMeta["command"] != "cloud access-policies list" || accessMeta["count"] != float64(1) || accessMeta["truncated"] != true {
+	if accessMeta["command"] != "cloud access-policies list" || accessMeta["count"] != float64(2) {
 		t.Fatalf("unexpected cloud access metadata: %+v", accessMeta)
 	}
-	if accessMeta["next_action"] == "" {
-		t.Fatalf("expected cloud access next_action")
+	if accessMeta["truncated"] == true || accessMeta["next_action"] != nil {
+		t.Fatalf("expected fully paged access policy output, got metadata %+v", accessMeta)
+	}
+	accessItems := accessEnvelope["data"].(map[string]any)["items"].([]any)
+	if len(accessItems) != 2 {
+		t.Fatalf("expected access policies from both pages, got %+v", accessItems)
 	}
 
 	out.Reset()
@@ -1609,6 +1624,7 @@ func TestCloudAccessServiceAccountsAndSyntheticsValidation(t *testing.T) {
 	for _, args := range [][]string{
 		{"cloud", "access-policies", "list"},
 		{"cloud", "access-policies", "list", "--bad"},
+		{"cloud", "access-policies", "list", "--region", "us", "--limit", "0"},
 		{"cloud", "access-policies", "list", "--region", "us", "--page-size", "0"},
 		{"cloud", "access-policies", "list", "--region", "us", "--realm-identifier", "123"},
 		{"cloud", "access-policies", "list", "--region", "us", "--realm-type", "team"},
@@ -3580,14 +3596,17 @@ func TestAuthInferenceHelpers(t *testing.T) {
 	if parsedTarget.Slug != "prod-observability" || parsedTarget.BaseURL != "https://prod-observability.grafana.net" {
 		t.Fatalf("unexpected parsed cloud stack target: %+v", parsedTarget)
 	}
-	if size := cloudStackPluginPageSize(0, 0); size != 100 {
-		t.Fatalf("unexpected default cloud stack plugin page size: %d", size)
+	if size := cloudCollectionPageSize(0, 0, 0); size != 100 {
+		t.Fatalf("unexpected default cloud collection page size: %d", size)
 	}
-	if size := cloudStackPluginPageSize(1, 1); size != 1 {
-		t.Fatalf("unexpected exhausted cloud stack plugin page size: %d", size)
+	if size := cloudCollectionPageSize(1, 1, 50); size != 1 {
+		t.Fatalf("unexpected exhausted cloud collection page size: %d", size)
 	}
-	if size := cloudStackPluginPageSize(250, 100); size != 100 {
-		t.Fatalf("unexpected capped cloud stack plugin page size: %d", size)
+	if size := cloudCollectionPageSize(250, 100, 200); size != 150 {
+		t.Fatalf("unexpected remaining cloud collection page size: %d", size)
+	}
+	if size := cloudCollectionPageSize(250, 100, 50); size != 50 {
+		t.Fatalf("unexpected requested cloud collection page size: %d", size)
 	}
 	if cursor := cloudNextPageCursor("scalar"); cursor != "" {
 		t.Fatalf("expected empty cloud next page cursor for scalar payload, got %q", cursor)
@@ -3799,6 +3818,62 @@ func TestAuthInferenceHelpers(t *testing.T) {
 	errorClient := &fakeClient{cloudStackPluginsErr: errors.New("plugins failed")}
 	if _, _, _, err := app.listCloudStackPlugins(context.Background(), errorClient, "prod-observability", "", 1); err == nil {
 		t.Fatalf("expected plugin list page error")
+	}
+
+	accessClient := &fakeClient{
+		cloudAccessPages: map[string]any{
+			"": map[string]any{
+				"items": []any{
+					map[string]any{"id": "ap-1", "name": "stack-readers"},
+				},
+				"metadata": map[string]any{"pagination": map[string]any{"nextPage": "/api/v1/accesspolicies?pageCursor=cursor-2"}},
+			},
+			"cursor-2": map[string]any{
+				"items": []any{
+					map[string]any{"id": "ap-2", "name": "stack-writers"},
+				},
+			},
+		},
+	}
+	accessPayload, count, truncated, err := app.listCloudAccessPolicies(context.Background(), accessClient, grafana.CloudAccessPolicyListRequest{
+		Region:   "us",
+		PageSize: 50,
+	}, 2)
+	if err != nil || count != 2 || truncated {
+		t.Fatalf("unexpected access policy list result: payload=%+v count=%d truncated=%v err=%v", accessPayload, count, truncated, err)
+	}
+	if len(accessPayload.(map[string]any)["items"].([]any)) != 2 {
+		t.Fatalf("expected both access policy pages, got %+v", accessPayload)
+	}
+	if accessClient.cloudAccessReq.PageCursor != "cursor-2" || accessClient.cloudAccessReq.PageSize != 1 {
+		t.Fatalf("unexpected paged access policy request: %+v", accessClient.cloudAccessReq)
+	}
+
+	accessPayload, count, truncated, err = app.listCloudAccessPolicies(context.Background(), accessClient, grafana.CloudAccessPolicyListRequest{
+		Region:   "us",
+		PageSize: 50,
+	}, 1)
+	if err != nil || count != 1 || !truncated {
+		t.Fatalf("unexpected truncated access policy result: payload=%+v count=%d truncated=%v err=%v", accessPayload, count, truncated, err)
+	}
+
+	scalarPayload, count, truncated, err = app.listCloudCollection(context.Background(), func(context.Context, int, string) (any, error) {
+		return map[string]any{
+			"id":       "policy-1",
+			"metadata": map[string]any{"pagination": map[string]any{"nextPage": "/api/v1/accesspolicies?pageCursor=cursor-3"}},
+		}, nil
+	}, cloudListOptions{Limit: 10})
+	if err != nil || count != 0 || !truncated || scalarPayload.(map[string]any)["id"] != "policy-1" {
+		t.Fatalf("unexpected scalar cloud collection result: payload=%+v count=%d truncated=%v err=%v", scalarPayload, count, truncated, err)
+	}
+
+	meta := accessPolicyMetadata(0, false)
+	if meta.Count != nil || meta.Truncated {
+		t.Fatalf("unexpected non-truncated access policy metadata: %+v", meta)
+	}
+	meta = accessPolicyMetadata(1, true)
+	if meta.Count == nil || *meta.Count != 1 || !meta.Truncated || meta.NextAction == "" {
+		t.Fatalf("unexpected truncated access policy metadata: %+v", meta)
 	}
 }
 

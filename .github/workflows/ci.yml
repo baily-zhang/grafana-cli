@@ -45,3 +45,6 @@ jobs:
             echo "Coverage gate failed: expected 100.0%, got ${total}"
             exit 1
           fi
+
+      - name: Install smoke test
+        run: ./test/install-smoke.sh

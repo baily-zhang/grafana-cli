@@ -2,8 +2,6 @@
 
 Agent-first CLI for Grafana and Grafana Cloud. Built for engineers working with AI coding agents like Codex and Claude Code.
 
-> **Preview** - This is a WIP hackathon build by [@matiasvillaverde](https://github.com/matiasvillaverde) and [@marctc](https://github.com/marctc).
-
 ## Why Your Agent Will Love It
 
 - **Discoverable** - `grafana schema --compact` returns a machine-readable command catalog in one bounded call
@@ -81,9 +79,26 @@ grafana --agent incident analyze --goal "Latency spike"
 
 ## Installation
 
-### GitHub Releases (recommended)
+### Shell installer
 
-Download a prebuilt binary from [Releases](https://github.com/matiasvillaverde/grafana-cli/releases), extract it, and move `grafana` (or `grafana.exe`) into your `PATH`.
+Install the latest macOS or Linux release straight from GitHub Releases:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matiasvillaverde/grafana-cli/main/scripts/install.sh | sh
+```
+
+Install into a custom directory or pin a version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matiasvillaverde/grafana-cli/main/scripts/install.sh | \
+  BINDIR="$HOME/.local/bin" GRAFANA_INSTALL_VERSION=<release-tag> sh
+```
+
+The shell installer works with the current GitHub release archives on macOS and Linux.
+
+### GitHub Releases
+
+Download a prebuilt archive from [Releases](https://github.com/matiasvillaverde/grafana-cli/releases), extract it, and move `grafana` (or `grafana.exe`) into your `PATH`.
 
 Binaries are published automatically on every merge to `main` for macOS, Linux, and Windows (`amd64` + `arm64`).
 

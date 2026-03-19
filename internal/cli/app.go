@@ -640,10 +640,15 @@ func (a *App) runDashboards(ctx context.Context, opts globalOptions, args []stri
 			return errors.New("--uid is required")
 		}
 
-		sharePath := buildDashboardSharePath(*uid, *slug, *panelID, *from, *to, *theme, *orgID)
+		effectiveOrgID := *orgID
+		if effectiveOrgID <= 0 {
+			effectiveOrgID = cfg.OrgID
+		}
+
+		sharePath := buildDashboardSharePath(*uid, *slug, *panelID, *from, *to, *theme, effectiveOrgID)
 		result, err := client.CreateShortURL(ctx, grafana.ShortURLRequest{
 			Path:  sharePath,
-			OrgID: *orgID,
+			OrgID: effectiveOrgID,
 		})
 		if err != nil {
 			return err

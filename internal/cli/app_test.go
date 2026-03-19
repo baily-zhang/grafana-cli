@@ -1386,13 +1386,27 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 		t.Fatalf("unexpected absolute short url output: %+v", shared)
 	}
 
+	store.cfg.OrgID = 5
+	client.createShortURLResp = map[string]any{"uid": "short-3", "url": "/goto/short-3"}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"dashboards", "share", "--uid", "ops"}); code != 0 {
+		t.Fatalf("dashboard share with configured org should succeed")
+	}
+	shared = decodeJSON(t, out.String())
+	if shared["share_path"] != "/d/ops/share?orgId=5" || shared["absolute_url"] != "https://grafana.example/goto/short-3" {
+		t.Fatalf("unexpected configured-org share output: %+v", shared)
+	}
+	if client.createShortURLReq.Path != "/d/ops/share?orgId=5" || client.createShortURLReq.OrgID != 5 {
+		t.Fatalf("unexpected configured-org share request: %+v", client.createShortURLReq)
+	}
+
 	client.createShortURLResp = "short-raw"
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"dashboards", "share", "--uid", "ops"}); code != 0 {
 		t.Fatalf("dashboard share raw fallback should succeed")
 	}
 	shared = decodeJSON(t, out.String())
-	if shared["share_path"] != "/d/ops/share" || shared["result"] != "short-raw" {
+	if shared["share_path"] != "/d/ops/share?orgId=5" || shared["result"] != "short-raw" {
 		t.Fatalf("unexpected share fallback output: %+v", shared)
 	}
 

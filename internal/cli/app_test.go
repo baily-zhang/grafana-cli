@@ -1357,7 +1357,7 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 		t.Fatalf("dashboard share should succeed")
 	}
 	shared := decodeJSON(t, out.String())
-	if shared["uid"] != "ops" || shared["panel_id"] != float64(12) || shared["share_path"] != "/d-solo/ops/share?from=now-6h&orgId=7&panelId=12&theme=light&to=now" {
+	if shared["uid"] != "ops" || shared["panel_id"] != float64(12) || shared["share_path"] != "d-solo/ops/share?from=now-6h&orgId=7&panelId=12&theme=light&to=now" {
 		t.Fatalf("unexpected share output: %+v", shared)
 	}
 	if shared["absolute_url"] != "https://grafana.example/goto/short-1" {
@@ -1366,7 +1366,7 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if client.rawMethod != "POST" || client.rawPath != "/api/short-urls" {
 		t.Fatalf("unexpected share request route: method=%s path=%s", client.rawMethod, client.rawPath)
 	}
-	if body, ok := client.rawBody.(map[string]any); !ok || body["path"] != "/d-solo/ops/share?from=now-6h&orgId=7&panelId=12&theme=light&to=now" {
+	if body, ok := client.rawBody.(map[string]any); !ok || body["path"] != "d-solo/ops/share?from=now-6h&orgId=7&panelId=12&theme=light&to=now" {
 		t.Fatalf("unexpected share request body: %+v", client.rawBody)
 	}
 
@@ -4552,10 +4552,10 @@ func TestContextConfigAndOutputEdgeBranches(t *testing.T) {
 }
 
 func TestBuildDashboardSharePath(t *testing.T) {
-	if got := buildDashboardSharePath("ops", "", 0, "", "", "", 0); got != "/d/ops/share" {
+	if got := buildDashboardSharePath("ops", "", 0, "", "", "", 0); got != "d/ops/share" {
 		t.Fatalf("unexpected dashboard share path: %s", got)
 	}
-	if got := buildDashboardSharePath("ops", "overview", 4, "now-1h", "now", "dark", 12); got != "/d-solo/ops/overview?from=now-1h&orgId=12&panelId=4&theme=dark&to=now" {
+	if got := buildDashboardSharePath("ops", "overview", 4, "now-1h", "now", "dark", 12); got != "d-solo/ops/overview?from=now-1h&orgId=12&panelId=4&theme=dark&to=now" {
 		t.Fatalf("unexpected panel share path: %s", got)
 	}
 }

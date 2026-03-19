@@ -2266,10 +2266,10 @@ func buildDashboardSharePath(uid, slug string, panelID int64, from, to, theme st
 		trimmedSlug = "share"
 	}
 
-	path := "/d/" + url.PathEscape(trimmedUID) + "/" + url.PathEscape(trimmedSlug)
+	path := "d/" + url.PathEscape(trimmedUID) + "/" + url.PathEscape(trimmedSlug)
 	query := url.Values{}
 	if panelID > 0 {
-		path = "/d-solo/" + url.PathEscape(trimmedUID) + "/" + url.PathEscape(trimmedSlug)
+		path = "d-solo/" + url.PathEscape(trimmedUID) + "/" + url.PathEscape(trimmedSlug)
 		query.Set("panelId", strconv.FormatInt(panelID, 10))
 	}
 	if strings.TrimSpace(from) != "" {

@@ -105,6 +105,33 @@ func TestCreateShortURLNormalizesPathAndOrgOverride(t *testing.T) {
 	}
 }
 
+func TestCreateShortURLUsesConfiguredOrgWhenOverrideMissing(t *testing.T) {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Grafana-Org-Id") != "12" {
+			t.Fatalf("unexpected configured org header: %q", r.Header.Get("X-Grafana-Org-Id"))
+		}
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != `{"path":"d/ops/share?orgId=12"}` {
+			t.Fatalf("unexpected short url body: %s", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"url":"/goto/short-12"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(config.Config{BaseURL: srv.URL, Token: "token", OrgID: 12}, srv.Client())
+	resp, err := client.CreateShortURL(context.Background(), ShortURLRequest{Path: "/d/ops/share?orgId=12"})
+	if err != nil {
+		t.Fatalf("unexpected create short url error: %v", err)
+	}
+	result, ok := resp.(map[string]any)
+	if !ok || result["url"] != "/goto/short-12" {
+		t.Fatalf("unexpected short url response: %+v", resp)
+	}
+}
+
 func TestHTTPErrorErrorString(t *testing.T) {
 	err := (&HTTPError{StatusCode: 500, Body: "boom"}).Error()
 	if !strings.Contains(err, "status=500") || !strings.Contains(err, "boom") {
@@ -442,6 +469,9 @@ func TestMethodInvalidURLBuildErrors(t *testing.T) {
 	}
 	if _, err := client.CreateDashboard(context.Background(), map[string]any{"title": "x"}, 1, true); err == nil {
 		t.Fatalf("expected create dashboard URL error")
+	}
+	if _, err := client.CreateShortURL(context.Background(), ShortURLRequest{Path: "/d/ops/share"}); err == nil {
+		t.Fatalf("expected create short url URL error")
 	}
 	if _, err := client.GetDashboard(context.Background(), "x"); err == nil {
 		t.Fatalf("expected get dashboard URL error")

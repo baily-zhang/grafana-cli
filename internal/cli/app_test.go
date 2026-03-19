@@ -1311,7 +1311,7 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 		alertContactResult:  []any{map[string]any{"name": "pagerduty"}},
 		alertPoliciesResult: map[string]any{"receiver": "default"},
 	}
-	app, out, _ := newTestApp(store, client)
+	app, out, errOut := newTestApp(store, client)
 
 	if code := app.Run(context.Background(), []string{"dashboards", "get", "--uid", "ops"}); code != 0 {
 		t.Fatalf("dashboard get should succeed")
@@ -1376,17 +1376,22 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 		t.Fatalf("unexpected share request: %+v", client.createShortURLReq)
 	}
 
+	client.rawResponses = map[string]any{"/api/org": map[string]any{"id": float64(3)}}
 	client.createShortURLResp = map[string]any{"uid": "short-2", "url": "https://grafana.example/goto/short-2?orgId=1"}
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"dashboards", "share", "--uid", "ops"}); code != 0 {
 		t.Fatalf("dashboard share with absolute url should succeed")
 	}
 	shared = decodeJSON(t, out.String())
-	if shared["share_path"] != "/d/ops/share" || shared["absolute_url"] != "https://grafana.example/goto/short-2?orgId=1" {
+	if shared["share_path"] != "/d/ops/share?orgId=3" || shared["absolute_url"] != "https://grafana.example/goto/short-2?orgId=1" {
 		t.Fatalf("unexpected absolute short url output: %+v", shared)
+	}
+	if client.createShortURLReq.Path != "/d/ops/share?orgId=3" || client.createShortURLReq.OrgID != 3 || client.rawMethod != "GET" || client.rawPath != "/api/org" {
+		t.Fatalf("unexpected inferred-org share request: req=%+v raw=%s %s", client.createShortURLReq, client.rawMethod, client.rawPath)
 	}
 
 	store.cfg.OrgID = 5
+	store.cfg.BaseURL = "https://grafana.example/grafana"
 	client.createShortURLResp = map[string]any{"uid": "short-3", "url": "/goto/short-3"}
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"dashboards", "share", "--uid", "ops"}); code != 0 {
@@ -1409,6 +1414,20 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if shared["share_path"] != "/d/ops/share?orgId=5" || shared["result"] != "short-raw" {
 		t.Fatalf("unexpected share fallback output: %+v", shared)
 	}
+
+	store.cfg.OrgID = 0
+	store.cfg.BaseURL = "https://grafana.example"
+	client.rawResponses = nil
+	client.rawErr = errors.New("lookup failed")
+	out.Reset()
+	errOut.Reset()
+	if code := app.Run(context.Background(), []string{"dashboards", "share", "--uid", "ops"}); code != 1 {
+		t.Fatalf("dashboard share without org resolution should fail")
+	}
+	if !strings.Contains(errOut.String(), "current org lookup failed") {
+		t.Fatalf("expected current org lookup failure, got %s", errOut.String())
+	}
+	client.rawErr = nil
 
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"folders", "list"}); code != 0 {
@@ -4627,5 +4646,45 @@ func TestBuildDashboardSharePath(t *testing.T) {
 	}
 	if got := buildDashboardSharePath("ops", "overview", 4, "now-1h", "now", "dark", 12); got != "/d-solo/ops/overview?from=now-1h&orgId=12&panelId=4&theme=dark&to=now" {
 		t.Fatalf("unexpected panel share path: %s", got)
+	}
+}
+
+func TestResolveDashboardShareOrgID(t *testing.T) {
+	if orgID, err := resolveDashboardShareOrgID(context.Background(), &fakeClient{}, config.Config{}, 7); err != nil || orgID != 7 {
+		t.Fatalf("expected explicit org id to win, got orgID=%d err=%v", orgID, err)
+	}
+	if orgID, err := resolveDashboardShareOrgID(context.Background(), &fakeClient{}, config.Config{OrgID: 5}, 0); err != nil || orgID != 5 {
+		t.Fatalf("expected configured org id to win, got orgID=%d err=%v", orgID, err)
+	}
+
+	client := &fakeClient{rawResponses: map[string]any{"/api/org": map[string]any{"id": json.Number("9")}}}
+	orgID, err := resolveDashboardShareOrgID(context.Background(), client, config.Config{}, 0)
+	if err != nil || orgID != 9 || client.rawMethod != "GET" || client.rawPath != "/api/org" {
+		t.Fatalf("expected current org lookup to succeed, got orgID=%d err=%v raw=%s %s", orgID, err, client.rawMethod, client.rawPath)
+	}
+
+	if _, err := resolveDashboardShareOrgID(context.Background(), &fakeClient{rawErr: errors.New("boom")}, config.Config{}, 0); err == nil || !strings.Contains(err.Error(), "current org lookup failed") {
+		t.Fatalf("expected current org lookup failure, got %v", err)
+	}
+	if _, err := resolveDashboardShareOrgID(context.Background(), &fakeClient{rawResponses: map[string]any{"/api/org": map[string]any{"id": "bad"}}}, config.Config{}, 0); err == nil || !strings.Contains(err.Error(), "did not return a valid id") {
+		t.Fatalf("expected invalid org lookup failure, got %v", err)
+	}
+}
+
+func TestResolveShortURLAbsolute(t *testing.T) {
+	if absolute, ok := resolveShortURLAbsolute("https://grafana.example/grafana", "/goto/short-1"); !ok || absolute != "https://grafana.example/goto/short-1" {
+		t.Fatalf("unexpected root-relative short url resolution: ok=%v absolute=%s", ok, absolute)
+	}
+	if absolute, ok := resolveShortURLAbsolute("https://grafana.example/grafana", "goto/short-2"); !ok || absolute != "https://grafana.example/goto/short-2" {
+		t.Fatalf("unexpected relative short url resolution: ok=%v absolute=%s", ok, absolute)
+	}
+	if absolute, ok := resolveShortURLAbsolute("https://grafana.example", "https://other.example/goto/short-3"); !ok || absolute != "https://other.example/goto/short-3" {
+		t.Fatalf("unexpected absolute short url passthrough: ok=%v absolute=%s", ok, absolute)
+	}
+	if _, ok := resolveShortURLAbsolute("://bad", "/goto/short-4"); ok {
+		t.Fatalf("expected invalid base url to fail")
+	}
+	if _, ok := resolveShortURLAbsolute("https://grafana.example", "http://%zz"); ok {
+		t.Fatalf("expected invalid short url to fail")
 	}
 }

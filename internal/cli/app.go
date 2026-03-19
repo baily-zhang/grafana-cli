@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -640,9 +641,9 @@ func (a *App) runDashboards(ctx context.Context, opts globalOptions, args []stri
 			return errors.New("--uid is required")
 		}
 
-		effectiveOrgID := *orgID
-		if effectiveOrgID <= 0 {
-			effectiveOrgID = cfg.OrgID
+		effectiveOrgID, err := resolveDashboardShareOrgID(ctx, client, cfg, *orgID)
+		if err != nil {
+			return err
 		}
 
 		sharePath := buildDashboardSharePath(*uid, *slug, *panelID, *from, *to, *theme, effectiveOrgID)
@@ -672,10 +673,8 @@ func (a *App) runDashboards(ctx context.Context, opts globalOptions, args []stri
 		enriched["panel_id"] = *panelID
 		enriched["share_path"] = sharePath
 		if shortURL, ok := payload["url"].(string); ok && strings.TrimSpace(shortURL) != "" {
-			if strings.HasPrefix(shortURL, "/") {
-				enriched["absolute_url"] = strings.TrimRight(cfg.BaseURL, "/") + shortURL
-			} else if parsed, err := url.Parse(shortURL); err == nil && parsed.Scheme != "" && parsed.Host != "" {
-				enriched["absolute_url"] = shortURL
+			if absoluteURL, ok := resolveShortURLAbsolute(cfg.BaseURL, shortURL); ok {
+				enriched["absolute_url"] = absoluteURL
 			}
 		}
 		return a.emit(opts, enriched)
@@ -2298,6 +2297,45 @@ func buildDashboardSharePath(uid, slug string, panelID int64, from, to, theme st
 		query.Set("orgId", strconv.FormatInt(orgID, 10))
 	}
 	return appendQuery(path, query)
+}
+
+func resolveDashboardShareOrgID(ctx context.Context, client APIClient, cfg config.Config, explicitOrgID int64) (int64, error) {
+	if explicitOrgID > 0 {
+		return explicitOrgID, nil
+	}
+	if cfg.OrgID > 0 {
+		return cfg.OrgID, nil
+	}
+
+	payload, err := client.Raw(ctx, http.MethodGet, "/api/org", nil)
+	if err != nil {
+		return 0, fmt.Errorf("org ID is not configured and current org lookup failed: %w", err)
+	}
+	orgID, ok := intPath(payload, "id")
+	if !ok || orgID <= 0 {
+		return 0, errors.New("org ID is not configured and current org lookup did not return a valid id; pass --org-id or run `grafana config set org-id <id>`")
+	}
+	return int64(orgID), nil
+}
+
+func resolveShortURLAbsolute(baseURL, shortURL string) (string, bool) {
+	parsedShortURL, err := url.Parse(strings.TrimSpace(shortURL))
+	if err != nil {
+		return "", false
+	}
+	if parsedShortURL.Scheme != "" && parsedShortURL.Host != "" {
+		return parsedShortURL.String(), true
+	}
+
+	parsedBaseURL, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsedBaseURL.Scheme == "" || parsedBaseURL.Host == "" {
+		return "", false
+	}
+	parsedBaseURL.Path = ""
+	parsedBaseURL.RawPath = ""
+	parsedBaseURL.RawQuery = ""
+	parsedBaseURL.Fragment = ""
+	return parsedBaseURL.ResolveReference(parsedShortURL).String(), true
 }
 
 func normalizeQueryHistoryBound(now time.Time, value string) string {

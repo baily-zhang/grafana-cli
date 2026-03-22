@@ -1395,6 +1395,13 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if client.dashPermissionsUID != "ops" || len(client.dashPermissionsReq.Items) != 3 || client.dashPermissionsReq.Items[1].TeamID != 7 || client.dashPermissionsReq.Items[2].UserID != 11 {
 		t.Fatalf("unexpected dashboard permissions update request: %+v uid=%q", client.dashPermissionsReq, client.dashPermissionsUID)
 	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--yes", "dashboards", "permissions", "update", "--uid", "ops", "--items-json", `[]`}); code != 0 {
+		t.Fatalf("dashboard permissions empty update should succeed: %s", errOut.String())
+	}
+	if len(client.dashPermissionsReq.Items) != 0 {
+		t.Fatalf("expected empty dashboard permissions update request, got %+v", client.dashPermissionsReq)
+	}
 
 	renderPath := filepath.Join(t.TempDir(), "renders", "ops.png")
 	out.Reset()
@@ -1531,6 +1538,13 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if client.folderPermissionsUID != "ops" || len(client.folderPermissionsReq.Items) != 1 || client.folderPermissionsReq.Items[0].Role != "Editor" {
 		t.Fatalf("unexpected folder permissions update request: %+v uid=%q", client.folderPermissionsReq, client.folderPermissionsUID)
 	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"--yes", "folders", "permissions", "update", "--uid", "ops", "--items-json", `[]`}); code != 0 {
+		t.Fatalf("folder permissions empty update should succeed: %s", errOut.String())
+	}
+	if len(client.folderPermissionsReq.Items) != 0 {
+		t.Fatalf("expected empty folder permissions update request, got %+v", client.folderPermissionsReq)
+	}
 
 	out.Reset()
 	if code := app.Run(context.Background(), []string{"annotations", "list", "--dashboard-uid", "ops", "--panel-id", "4", "--limit", "20", "--from", "now-1h", "--to", "now", "--tags", "prod,error", "--type", "annotation"}); code != 0 {
@@ -1636,6 +1650,23 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"--yes", "dashboards", "permissions", "update", "--bad"}); code != 1 {
 		t.Fatalf("dashboard permissions update parse should fail")
 	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"dashboards", "permissions"}); code != 0 {
+		t.Fatalf("dashboard permissions help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected dashboard permissions discovery output")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"dashboards", "permissions", "-help"}); code != 0 {
+		t.Fatalf("dashboard permissions explicit help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected explicit dashboard permissions discovery output")
+	}
+	if code := app.Run(context.Background(), []string{"dashboards", "permissions", "bad"}); code != 1 {
+		t.Fatalf("dashboard permissions unknown command should fail")
+	}
 	if code := app.Run(context.Background(), []string{"dashboards", "render", "--bad"}); code != 1 {
 		t.Fatalf("dashboard render parse should fail")
 	}
@@ -1678,6 +1709,9 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"--yes", "folders", "permissions", "update", "--uid", "ops"}); code != 1 {
 		t.Fatalf("folders permissions update missing items should fail")
 	}
+	if code := app.Run(context.Background(), []string{"--yes", "folders", "permissions", "update", "--items-json", `[]`}); code != 1 {
+		t.Fatalf("folders permissions update missing uid should fail")
+	}
 	if code := app.Run(context.Background(), []string{"folders", "get", "--bad"}); code != 1 {
 		t.Fatalf("folders get parse should fail")
 	}
@@ -1686,6 +1720,23 @@ func TestDashboardFolderAnnotationAndAlertingCommands(t *testing.T) {
 	}
 	if code := app.Run(context.Background(), []string{"--yes", "folders", "permissions", "update", "--bad"}); code != 1 {
 		t.Fatalf("folders permissions update parse should fail")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"folders", "permissions"}); code != 0 {
+		t.Fatalf("folders permissions help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected folders permissions discovery output")
+	}
+	out.Reset()
+	if code := app.Run(context.Background(), []string{"folders", "permissions", "-help"}); code != 0 {
+		t.Fatalf("folders permissions explicit help should succeed")
+	}
+	if _, ok := decodeJSON(t, out.String())["commands"]; !ok {
+		t.Fatalf("expected explicit folders permissions discovery output")
+	}
+	if code := app.Run(context.Background(), []string{"folders", "permissions", "bad"}); code != 1 {
+		t.Fatalf("folders permissions unknown command should fail")
 	}
 	if code := app.Run(context.Background(), []string{"folders", "bad"}); code != 1 {
 		t.Fatalf("folders unknown command should fail")
@@ -3144,7 +3195,7 @@ func TestRequireAuthAndClientErrors(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"query-history", "list"}); code != 1 {
 		t.Fatalf("expected query-history auth error")
 	}
-	store = &fakeStore{cfg: config.Config{Token: "x"}}
+	store = &fakeStore{cfg: config.Config{Token: "x", BaseURL: "https://grafana.example", OrgID: 1}}
 	client = &fakeClient{rawErr: errors.New("query-history fail")}
 	app, _, _ = newTestApp(store, client)
 	if code := app.Run(context.Background(), []string{"query-history", "list"}); code != 1 {

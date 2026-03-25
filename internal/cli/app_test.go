@@ -3569,6 +3569,9 @@ func TestAppErrorBranches(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"assistant", "status", "--chat-id", "c1"}); code != 1 {
 		t.Fatalf("expected assistant status client error")
 	}
+	if code := app.Run(context.Background(), []string{"assistant", "wait", "--chat-id", "c1"}); code != 1 {
+		t.Fatalf("expected assistant wait client error")
+	}
 	client.assistantStatusErr = nil
 	client.assistantSkillsErr = errors.New("assistant skills fail")
 	if code := app.Run(context.Background(), []string{"assistant", "skills"}); code != 1 {
